@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Literal, Union
+from typing import List, Dict, Optional, Tuple, Union
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -23,7 +23,6 @@ _FLOAT = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
 _NUM_LINE = re.compile(rf"^\s*({_FLOAT})\s*,\s*({_FLOAT})\s*$")
 _TAG_LINE = re.compile(rf"^\s*([A-Za-z][A-Za-z0-9_]*)\s+({_FLOAT})\s*$")
 
-
 @dataclass
 class Segment:
     H: np.ndarray                 # Field (T)
@@ -31,7 +30,6 @@ class Segment:
     idx: int                      # Segment index in file order
     kind: str = "unknown"         # "forc" or "cal"
     Hb: Optional[float] = None    # inferred reversal field for FORCs
-
 
 # ============================================================
 # Plot style
@@ -55,7 +53,6 @@ def set_plot_style(
         "axes.formatter.useoffset": False,
         "axes.formatter.limits": (-3, 3),
     })
-
 
 PathLike = Union[str, os.PathLike]
 
@@ -105,24 +102,6 @@ def safe_filename(name: str, replacement: str = "_") -> str:
         stem = stem + replacement
     return stem + (dot + suffix if dot else "")
 
-def make_out_path(
-    input_path: PathLike,
-    out_dir: Optional[PathLike] = None,
-    suffix: str = "_processed",
-    ext: str = ".csv",
-) -> Path:
-    """
-    Example export helper:
-      input: /path/to/file.forc
-      output: /path/to/file_processed.csv  (or out_dir if provided)
-    """
-    inp = as_path(input_path)
-    base = safe_filename(inp.stem + suffix) + ext
-    out_base = as_path(out_dir) if out_dir is not None else inp.parent
-    out = out_base / base
-    ensure_parent_dir(out)
-    return out
-
 def get_forc_output_base_dir(out: Dict[str, object]) -> Path:
     """
     Resolve the base output directory for FORC exports.
@@ -150,18 +129,15 @@ def get_forc_output_base_dir(out: Dict[str, object]) -> Path:
 
     return Path.cwd()
 
-
 def get_forc_profiles_dir(out: Dict[str, object]) -> Path:
     out_dir = get_forc_output_base_dir(out) / "FORC_profiles"
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir
 
-
 def get_forc_figures_dir(out: Dict[str, object]) -> Path:
     out_dir = get_forc_output_base_dir(out) / "FORC_figures"
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir
-
 
 # ============================================================
 # File reading / header parsing
@@ -178,17 +154,14 @@ def _read_text_normalized(path: PathLike, encoding: str = "utf-8") -> str:
         txt = raw.decode("latin-1", errors="replace")
     return txt.replace("\r\n", "\n").replace("\r", "\n")
 
-
 def _is_numeric_line(line: str) -> bool:
     return _NUM_LINE.match(line) is not None
-
 
 def _parse_numeric_line(line: str) -> Tuple[float, float]:
     m = _NUM_LINE.match(line)
     if m is None:
         raise ValueError(f"Not a numeric line: {line!r}")
     return float(m.group(1)), float(m.group(2))
-
 
 def read_header_tags_and_data_start(path: PathLike) -> tuple[dict, int]:
     """
@@ -228,7 +201,6 @@ def read_header_tags_and_data_start(path: PathLike) -> tuple[dict, int]:
 
     return tags, data_start_idx
 
-
 def read_forc_header_limits(path: PathLike) -> Tuple[Optional[float], Optional[float]]:
     Hb2 = None
     Hc2 = None
@@ -250,7 +222,6 @@ def read_forc_header_limits(path: PathLike) -> Tuple[Optional[float], Optional[f
             break
 
     return Hb2, Hc2
-
 
 # ============================================================
 # Segmentation (robust Mac/Win)
@@ -354,7 +325,6 @@ def read_segments_raw(
 
     return segments
 
-
 def split_cal_first_point(
     segments: List[Segment],
     HCal: float,
@@ -390,7 +360,6 @@ def split_cal_first_point(
 
     return out
 
-
 # ============================================================
 # Drift correction + conditioning
 # ============================================================
@@ -422,7 +391,6 @@ def compute_drift_from_cals(
         raise ValueError("fit must be 'linear' or 'pchip'.")
     return drift_at_seg, cal_pos, cal_M
 
-
 def apply_drift_correction(segments: List[Segment], drift_at_seg: np.ndarray) -> List[Segment]:
     out: List[Segment] = []
     for i, seg in enumerate(segments):
@@ -435,7 +403,6 @@ def apply_drift_correction(segments: List[Segment], drift_at_seg: np.ndarray) ->
             Hb=seg.Hb,
         ))
     return out
-
 
 def replace_endpoints(seg: Segment, n: int = 1, replace_first: bool = True, replace_last: bool = True) -> Segment:
     """Replace first and/or last n points with linear extrapolation from interior."""
@@ -462,7 +429,6 @@ def replace_endpoints(seg: Segment, n: int = 1, replace_first: bool = True, repl
 
     return Segment(H=H, M=M, idx=seg.idx, kind=seg.kind, Hb=seg.Hb)
 
-
 def subtract_lower_branch(segments: List[Segment], reference: str = "first_forc") -> List[Segment]:
     """Subtract baseline curve from each FORC; baseline is first FORC."""
     forcs = [s for s in segments if s.kind == "forc"]
@@ -482,10 +448,9 @@ def subtract_lower_branch(segments: List[Segment], reference: str = "first_forc"
                            idx=seg.idx, kind=seg.kind, Hb=seg.Hb))
     return out
 
-
 #   Regridding FORCs onto a regular B grid
 
-def infer_B_step_from_forcs(forcs, frac=0.5):
+def infer_B_step_from_forcs(forcs):
     """
     Robustly infer a typical B step from many FORC segments.
     Uses the median of finite, positive |dB| values.
@@ -509,7 +474,6 @@ def infer_B_step_from_forcs(forcs, frac=0.5):
     dB = np.median(np.concatenate(dB_all))
     # Optionally "round" to a nice number (e.g., 1e-3 T) if it’s close
     return float(dB)
-
 
 def regrid_segment_BM(seg, B_grid, method="linear", extrapolate=False):
     """
@@ -549,35 +513,6 @@ def regrid_segment_BM(seg, B_grid, method="linear", extrapolate=False):
 
     from dataclasses import replace
     return replace(seg, H=np.asarray(B_grid, float), M=np.asarray(M_i, float))
-
-def _print_first_two_forcs_original_vs_regrid(forcs_orig, forcs_corr, n=8):
-    o = [s for s in forcs_orig if getattr(s, "kind", None) == "forc"]
-    c = [s for s in forcs_corr if getattr(s, "kind", None) == "forc"]
-
-    print("\n--- DEBUG: first two FORCs (original B,M) vs (regridded Bcorr,Mcorr) ---")
-    for k in range(min(2, len(o), len(c))):
-        Bo = np.asarray(o[k].H, float)
-        Mo = np.asarray(o[k].M, float)
-        Bc = np.asarray(c[k].H, float)
-        Mc = np.asarray(c[k].M, float)
-
-        ok_o = np.isfinite(Bo) & np.isfinite(Mo)
-        ok_c = np.isfinite(Bc) & np.isfinite(Mc)
-
-        print(f"\nFORC #{k+1}: idx(orig)={o[k].idx}, idx(corr)={c[k].idx}, Hb={getattr(o[k],'Hb',np.nan):.6g}")
-        print("  Original (B,M):")
-        arr_o = np.c_[Bo[ok_o], Mo[ok_o]]
-        print(arr_o[:n])
-
-        print("  Regridded (Bcorr,Mcorr):")
-        arr_c = np.c_[Bc[ok_c], Mc[ok_c]]
-        print(arr_c[:n])
-
-        # show grid sanity
-        if ok_c.sum() > 2:
-            dB = np.nanmedian(np.diff(Bc[ok_c]))
-            print(f"  Regrid step ~ {dB:.6g} T | n_corr={ok_c.sum()} | n_orig={ok_o.sum()}")
-
 
 def regrid_forcs_in_hysteresis_space(
     forcs,
@@ -625,55 +560,6 @@ def regrid_forcs_in_hysteresis_space(
               f"(n={len(B_grid)}), step={B_step:.6g} T")
 
     return out
-
-def phase1_prepare_segments(
-    path: str,
-    cal_tol_T: float = 2e-3,
-    drift_fit: str = "linear",
-    endpoint_replace_n: int = 1,
-    do_lower_branch_subtract: bool = True,
-    require_calibration: bool = False,
-    # segmentation knobs:
-    blank_sep: int = 2,
-    jump_T: float = 0.05,
-    cal_drop_T: float = 0.02,
-    verbose: bool = True,
-) -> List[Segment]:
-    tags, data_start_idx = read_header_tags_and_data_start(path)
-    if "HCal" not in tags:
-        raise ValueError("Header tag HCal not found; cannot split calibration points safely.")
-    HCal = float(tags["HCal"])
-
-    segs = read_segments_raw(
-        path,
-        data_start_idx=data_start_idx,
-        dtype=np.float64,
-        min_block_len=2,
-        blank_sep=blank_sep,
-        jump_T=jump_T,
-        HCal=HCal,
-        cal_tol_T=cal_tol_T,
-        cal_drop_T=cal_drop_T,
-        verbose=verbose,
-    )
-
-    segs = split_cal_first_point(segs, HCal=HCal, tol_T=cal_tol_T)
-
-    cal_segs = [s for s in segs if s.kind == "cal"]
-    if len(cal_segs) >= 2:
-        drift_at_seg, _, _ = compute_drift_from_cals(segs, fit=drift_fit)
-        segs = apply_drift_correction(segs, drift_at_seg)
-    elif require_calibration:
-        kinds: Dict[str, int] = {}
-        for s in segs:
-            kinds[s.kind] = kinds.get(s.kind, 0) + 1
-        raise ValueError(f"Need >=2 calibration points; found {len(cal_segs)}. Kind counts: {kinds}.")
-
-    if endpoint_replace_n > 0:
-        segs = [replace_endpoints(s, n=endpoint_replace_n) if s.kind == "forc" else s for s in segs]
-
-    return subtract_lower_branch(segs, reference="first_forc") if do_lower_branch_subtract else segs
-
 
 def phase1_prepare_segments_dual(
     path: str,
@@ -737,7 +623,6 @@ def phase1_prepare_segments_dual(
     segs_rho = subtract_lower_branch(segs_display, reference="first_forc") if do_lower_branch_subtract else segs_display
     return segs_display, segs_rho
 
-
 def _list_stack_input_files(
     path: PathLike,
     stack: bool = False,
@@ -784,7 +669,6 @@ def _list_stack_input_files(
         print(f"Matched {len(files)} file(s) with pattern: {pattern}")
 
     return files
-
 
 def _prepare_single_input_for_rho(
     path: PathLike,
@@ -847,7 +731,6 @@ def _prepare_single_input_for_rho(
         "forcs_rho": forcs_rho,
         "forcs_for_rho_corr": forcs_for_rho_corr,
     }
-
 
 def _infer_common_stack_grid(
     prepared_items: List[Dict[str, object]],
@@ -917,7 +800,6 @@ def _infer_common_stack_grid(
         "Hb_max": Hb_max,
     }
 
-
 def _stack_nan_grids(
     grids: List[np.ndarray],
     method: str = "mean",
@@ -950,7 +832,6 @@ def _stack_nan_grids(
         return out, counts
 
     raise ValueError("stack_method must be 'mean' or 'median'.")
-
 
 # ============================================================
 # Plot: individual FORC curves (hysteresis space)
@@ -1011,7 +892,6 @@ def plot_forc_curves_hysteresis(
     ax.set_title(title)
     fig.subplots_adjust(left=0.14, right=0.97, bottom=0.14, top=0.88)
     plt.show()
-
 
 # ============================================================
 # Phase 2: build grid + LOESS rho (Numba)
@@ -1096,7 +976,6 @@ try:
     NUMBA_OK = True
 except Exception:
     NUMBA_OK = False
-
 
 def build_Hb_Ha_grid_regridded(
     forcs: List[Segment],
@@ -1231,7 +1110,6 @@ def build_Hb_Ha_grid_regridded(
     # also return inferred steps (dHa,dHb equivalents)
     return Hb_vals, Ha_vals, M_grid, float(Ha_step), float(Hb_step)
 
-
 def _build_offsets(rx: int, ry: int) -> np.ndarray:
     offs = []
     for di in range(-ry, ry + 1):
@@ -1240,7 +1118,6 @@ def _build_offsets(rx: int, ry: int) -> np.ndarray:
             if u <= 1.0:
                 offs.append((di, dj, u))
     return np.asarray(offs, dtype=np.float64)
-
 
 if NUMBA_OK:
 
@@ -1371,7 +1248,6 @@ if NUMBA_OK:
 
         return rho
 
-
 def loess_rho_from_grid_fast(
     Hb_vals, Ha_vals, M_grid,
     span_Ha_T: float = 0.005,
@@ -1399,7 +1275,6 @@ def loess_rho_from_grid_fast(
 
     return loess_rho_from_grid_numba(Hb_vals, Ha_vals, M, offsets, int(min_pts))
 
-
 # ============================================================
 # Colormap + rho plotting
 # ============================================================
@@ -1416,7 +1291,6 @@ def forc_colormap_v1():
         (1.00, "#d100b5"),
     ]
     return LinearSegmentedColormap.from_list("forc_v1_attached", colors)
-
 
 def forc_colormap_v2():
     """
@@ -1452,7 +1326,6 @@ def forc_colormap_v3():
     ]
     return LinearSegmentedColormap.from_list("forc_v3_rainbowish", colors)
 
-
 # --- registry + selector ---
 FORC_CMAP_REGISTRY = {
     1: forc_colormap_v1,
@@ -1460,11 +1333,9 @@ FORC_CMAP_REGISTRY = {
     3: forc_colormap_v3,
 }
 
-
 def get_forc_cmap(color_scale_version: int = 1):
     fn = FORC_CMAP_REGISTRY.get(int(color_scale_version), forc_colormap_v1)
     return fn()
-
 
 def _rho_norm(rho, pct=100, normalize_to_unit: bool = False):
     vmax = np.nanpercentile(np.abs(rho), pct)
@@ -1476,7 +1347,6 @@ def _rho_norm(rho, pct=100, normalize_to_unit: bool = False):
         return TwoSlopeNorm(vmin=-1.0, vcenter=0.0, vmax=1.0), vmax
 
     return TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax), vmax
-
 
 # -------------------------
 # Grid upsampling for smoother FORC plots
@@ -1521,7 +1391,6 @@ def _contour_levels(vmax, frac_step=0.10):
     levels_pos = np.arange(step, (n + 1) * step + 1e-30, step)
     return np.r_[-levels_pos[::-1], levels_pos]
 
-
 def _low_level_contours(level_frac: float = 0.01) -> np.ndarray:
     """Return symmetric +/- low-level contour(s) in *fraction of full-scale*."""
     f = float(level_frac)
@@ -1529,7 +1398,6 @@ def _low_level_contours(level_frac: float = 0.01) -> np.ndarray:
     if not np.isfinite(f) or f <= 0:
         return np.array([], dtype=float)
     return np.array([-f, +f], dtype=float)
-
 
 def plot_rho_HbHa(
     Hb_vals, Ha_vals, rho,
@@ -1897,7 +1765,6 @@ def plot_rho_HuHc(
         return fig, ax, pm, cbar
     return None
 
-
 # ============================================================
 # LOESS param guess helper
 # ============================================================
@@ -1992,7 +1859,6 @@ def guess_loess_params(
         "n_eff_est": float(n_eff),
         "min_pts_suggested": int(min_pts),
     }
-
 
 # ============================================================
 # One-call pipeline (THIS is what you use in the notebook)
@@ -2279,7 +2145,6 @@ def run_forc_pipeline(
         },
     }
 
-
 # ============================================================
 # Profiles / slices (use LOESS-smoothed rho input)
 # ============================================================
@@ -2290,7 +2155,6 @@ def bu_bc_from_hbha(Hb_vals: np.ndarray, Ha_vals: np.ndarray) -> Tuple[np.ndarra
     Bc = 0.5 * (Ha2D - Hb2D)
     return Bu, Bc
 
-
 def estimate_steps(Hb_vals: np.ndarray, Ha_vals: np.ndarray) -> Tuple[float, float]:
     Hb_vals = np.asarray(Hb_vals, float)
     Ha_vals = np.asarray(Ha_vals, float)
@@ -2299,7 +2163,6 @@ def estimate_steps(Hb_vals: np.ndarray, Ha_vals: np.ndarray) -> Tuple[float, flo
     dBu = 0.5 * (abs(dHa) + abs(dHb))
     dBc = 0.5 * (abs(dHa) + abs(dHb))
     return dBu, dBc
-
 
 def bin_profile(
     x: np.ndarray,
@@ -2342,7 +2205,6 @@ def bin_profile(
     out[ok] = sums[ok] / counts[ok]
     return centers, out
 
-
 def gaussian_smooth_1d_nan(y: np.ndarray, sigma_bins: Optional[float] = 2.0) -> np.ndarray:
     if sigma_bins is None or sigma_bins <= 0:
         return np.asarray(y, float)
@@ -2361,7 +2223,6 @@ def gaussian_smooth_1d_nan(y: np.ndarray, sigma_bins: Optional[float] = 2.0) -> 
     ok = den > 0
     out[ok] = num[ok] / den[ok]
     return out
-
 
 def resolve_profile_bounds(
     Bu: np.ndarray,
@@ -2387,7 +2248,6 @@ def resolve_profile_bounds(
         Bc_max = float(np.nanmax(Bc[pos])) if np.any(pos) else float(np.nanmax(Bc[valid]))
 
     return {"Bu_min": float(Bu_min), "Bu_max": float(Bu_max), "Bc_min": float(Bc_min), "Bc_max": float(Bc_max)}
-
 
 def profile_peak_and_fwhm(x: np.ndarray, y: np.ndarray, use_abs: bool = True) -> Dict[str, float]:
     """Peak x and FWHM (computed on |y| by default)."""
@@ -2522,7 +2382,6 @@ def forc_profiles_smoothed(
                  "smooth_sigma_bins": smooth_sigma_bins, "marginal_mode": str(marginal_mode)},
     }
 
-
 def slice_profile_smoothed(
     Hb_vals: np.ndarray,
     Ha_vals: np.ndarray,
@@ -2584,7 +2443,6 @@ def slice_profile_smoothed(
         "x_max": float(x_max),
         "peak": pk,
     }
-
 
 def plot_profiles_multifig(
     default_profiles: Dict[str, object],
@@ -2705,7 +2563,6 @@ def plot_profiles_multifig(
                 txt += f"\nFWHM = {fwhm:.4g} T"
             ax.text(0.7, 0.95, txt, transform=ax.transAxes, va="top", ha="left")
 
-
     # consistent plotting-area feel
     fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0, wspace=0.2, hspace=0.3)
     plt.show()
@@ -2736,7 +2593,6 @@ def find_bounded_peak_rho(Hb_vals, Ha_vals, rho, Bu_min=None, Bu_max=None, Bc_mi
         "rho": float(rho.ravel()[idx]),
         "flat_index": int(idx),
     }
-
 
 def bounded_peak_profiles(
     Hb_vals,
@@ -2777,7 +2633,6 @@ def bounded_peak_profiles(
         "horizontal": prof_bc,
         "vertical": prof_bu,
     }
-
 
 def track_bu_offset_vs_bc(Hb_vals, Ha_vals, rho, Bu_min=None, Bu_max=None, Bc_min=None, Bc_max=None,
                           bc_window=None, rho_frac_cutoff=0.001, n_centers=100):
@@ -2871,7 +2726,6 @@ def build_bounded_peak_profile_bundle(
     bundle["dpi"] = {"dpi": dpi}
     return bundle
 
-
 def print_bounded_peak_summary(bundle):
     pk = bundle["peak"]
     print("Peak rho point inside bounded plot area:")
@@ -2891,7 +2745,6 @@ def print_bounded_peak_summary(bundle):
     if np.isfinite(float(pk_bu.get("fwhm", np.nan))):
         print(f"  Bu-profile FWHM = {float(pk_bu['fwhm']):.6f} T")
         print(" ")
-
 
 def plot_bounded_peak_profiles(
     bundle,
@@ -3014,12 +2867,10 @@ def plot_bu_offset_tracking(bundle, title="Tracking Bu offset with coercivity", 
 
 PathLike = Union[str, os.PathLike]
 
-
 def _safe_filename(name: str) -> str:
     name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", str(name))
     name = name.rstrip(" .")
     return name if name else "FORC_output"
-
 
 def export_current_figure_from_out(
     out: Dict[str, object],
@@ -3099,7 +2950,6 @@ def _profile_to_arrays(profile):
 
     raise TypeError(f"Unsupported profile type: {type(profile)}")
 
-
 def _extract_default_profile(default_profiles, key):
     """
     Safely extract default profile from dict-like or tuple/list container.
@@ -3112,7 +2962,6 @@ def _extract_default_profile(default_profiles, key):
         "'vertical' and 'horizontal'."
     )
 
-
 def _infer_target_from_profile(profile, fallback=np.nan):
     """
     Try to get target from dict/tuple profile; if absent, use fallback.
@@ -3124,7 +2973,6 @@ def _infer_target_from_profile(profile, fallback=np.nan):
     except Exception:
         pass
     return fallback
-
 
 def _save_profile_txt(profile, profile_type, cut_value, specimen_name, export_dir):
     """
@@ -3158,7 +3006,6 @@ def _save_profile_txt(profile, profile_type, cut_value, specimen_name, export_di
 
     df.to_csv(out_path, sep="\t", index=False, float_format="%.10g")
     print(f"Saved: {out_path}")
-
 
 def export_forc_profiles_txt(
     bundle,
