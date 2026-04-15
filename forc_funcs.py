@@ -2868,7 +2868,7 @@ def build_bounded_peak_profile_bundle(
     bundle["meta"] = {
         "smooth_sigma_bins": smooth_sigma_bins,
     }
-    bundle["dpi"] = {"dpi": dpi},
+    bundle["dpi"] = {"dpi": dpi}
     return bundle
 
 
