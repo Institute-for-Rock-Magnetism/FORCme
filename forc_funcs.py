@@ -1379,6 +1379,8 @@ def upsample_forc_grid(Hb_vals, Ha_vals, rho, factor=3):
 
     return Hb_new, Ha_new, rho_new
 
+
+
 def _contour_levels(vmax, frac_step=0.10):
     if vmax is None or (not np.isfinite(vmax)) or vmax <= 0:
         return None
@@ -1391,6 +1393,7 @@ def _contour_levels(vmax, frac_step=0.10):
     levels_pos = np.arange(step, (n + 1) * step + 1e-30, step)
     return np.r_[-levels_pos[::-1], levels_pos]
 
+
 def _low_level_contours(level_frac: float = 0.01) -> np.ndarray:
     """Return symmetric +/- low-level contour(s) in *fraction of full-scale*."""
     f = float(level_frac)
@@ -1398,6 +1401,7 @@ def _low_level_contours(level_frac: float = 0.01) -> np.ndarray:
     if not np.isfinite(f) or f <= 0:
         return np.array([], dtype=float)
     return np.array([-f, +f], dtype=float)
+
 
 def plot_rho_HbHa(
     Hb_vals, Ha_vals, rho,
@@ -1477,6 +1481,7 @@ def plot_rho_HbHa(
     plt.tight_layout()
     plt.show()
 
+
 def _rho_window_vmax(
     Hb_vals, Ha_vals, rho,
     pct: float = 99,
@@ -1525,6 +1530,7 @@ def _rho_window_vmax(
         vmax = 1.0
     return vmax
 
+
 def _rho_window_vmax_bu_bc(
     Hb_vals, Ha_vals, rho,
     pct: float = 99.0,
@@ -1566,6 +1572,23 @@ def _rho_window_vmax_bu_bc(
         vmax = 1.0
     return vmax
 
+
+def _centers_to_edges_1d(x):
+    """
+    Convert 1D cell centers to 1D cell edges.
+    """
+    x = np.asarray(x, float)
+    if x.ndim != 1 or x.size < 2:
+        raise ValueError("x must be a 1D array with at least 2 points.")
+
+    dx = np.diff(x)
+    edges = np.empty(x.size + 1, dtype=float)
+    edges[1:-1] = 0.5 * (x[:-1] + x[1:])
+    edges[0] = x[0] - 0.5 * dx[0]
+    edges[-1] = x[-1] + 0.5 * dx[-1]
+    return edges
+
+
 def plot_rho_HuHc(
     Hb_vals, Ha_vals, rho,
     Hu_min=None, Hu_max=None,
@@ -1584,53 +1607,48 @@ def plot_rho_HuHc(
     normalize_to_unit: bool = True,
     color_scale_version: int = 1,
     show_low_level_contours: bool = True,
-    low_level_frac: float = 0.01,        # +/- 1% Change for picking out zero
+    low_level_frac: float = 0.01,
     low_level_color: str = "0.1",
     low_level_alpha: float = 0.9,
     low_level_lw: float = 0.2,
-
-    # --- notebook/module-safe controls ---
-    show: bool = True,                   # call plt.show()
-    close: bool = False,                 # close fig after showing/saving
-    return_fig: bool = True,             # return fig/ax handles for export
-
-    # --- NEW plotting controls ---
-    upsample_factor: int = 0,            # 0 or 1 = no upsampling, 2 or 4 for smoother display
-    edge_mask_hc_bins: float = 0.0,      # mask unreliable strip near Bc=0; try 1.5 to 2.0
+    show: bool = True,
+    close: bool = False,
+    return_fig: bool = True,
+    upsample_factor: int = 0,
+    edge_mask_hc_bins: float = 0.0,
 ):
+    """
+    Plot rho in Bu/Bc space.
+
+    Notes
+    -----
+    - `upsample_factor` applies optional plotting-only upsampling on the Hb/Ha
+      grid before rotation into Bu/Bc space.
+    - The color image is drawn with rotated cell EDGES so the plot reaches the
+      zero-coercivity axis correctly.
+    - Contours are drawn on the rotated cell CENTERS.
+    """
     cmap = get_forc_cmap(color_scale_version)
 
-    # ---------------------------------------------------------
-    # Keep original grid for normalization and edge masking
-    # ---------------------------------------------------------
     Hb0 = np.asarray(Hb_vals, float)
     Ha0 = np.asarray(Ha_vals, float)
     rho0 = np.asarray(rho, float).copy()
 
-    # ---------------------------------------------------------
-    # Optional mask near Bc=0 to suppress edge artefacts
-    # ---------------------------------------------------------
     if edge_mask_hc_bins is not None and float(edge_mask_hc_bins) > 0:
         Hb2D0, Ha2D0 = np.meshgrid(Hb0, Ha0, indexing="ij")
         Bc0 = 0.5 * (Ha2D0 - Hb2D0)
 
         dHa0 = float(np.nanmedian(np.diff(Ha0))) if len(Ha0) > 1 else np.nan
         dHb0 = float(np.nanmedian(np.diff(Hb0))) if len(Hb0) > 1 else dHa0
-
         if not np.isfinite(dHa0):
             dHa0 = 0.0
         if not np.isfinite(dHb0):
             dHb0 = dHa0
 
         h_edge = float(edge_mask_hc_bins) * max(dHa0, dHb0)
-
         if h_edge > 0:
             rho0[Bc0 < h_edge] = np.nan
 
-    # ---------------------------------------------------------
-    # Normalize using ORIGINAL rho inside the ORIGINAL plot window
-    # This avoids upsampling from reducing the peak amplitude
-    # ---------------------------------------------------------
     vmax = _rho_window_vmax(
         Hb0, Ha0, rho0,
         pct=pct,
@@ -1639,46 +1657,34 @@ def plot_rho_HuHc(
         Hc_min=Hc_min, Hc_max=Hc_max,
         hu_expand=hu_expand,
     )
-
-    # Safety fallback
     if (not np.isfinite(vmax)) or vmax <= 0:
         vmax = 1.0
 
-    # ---------------------------------------------------------
-    # Optional visual upsampling AFTER normalization is fixed
-    # ---------------------------------------------------------
-    Hb_plot = Hb0
-    Ha_plot = Ha0
-    rho_plot_base = rho0
-
-    n_plot_cells = len(Hb0) * len(Ha0)
-
-    if upsample_factor is None:
-        upsample_factor = 0
-
-    upsample_factor = int(upsample_factor)
-
-    if upsample_factor > 1:
-        # protect against memory blowups
-        if n_plot_cells <= 250_000 and upsample_factor >= 4:
-            Hb_plot, Ha_plot, rho_plot_base = upsample_forc_grid(Hb0, Ha0, rho0, factor=4)
-        elif n_plot_cells <= 1_000_000 and upsample_factor >= 2:
-            Hb_plot, Ha_plot, rho_plot_base = upsample_forc_grid(Hb0, Ha0, rho0, factor=2)
-        # else: skip upsampling silently for very large grids
-
-    # ---------------------------------------------------------
-    # Apply the fixed normalization
-    # ---------------------------------------------------------
     if normalize_to_unit:
         norm = TwoSlopeNorm(vmin=-1.0, vcenter=0.0, vmax=1.0)
-        rho_plot = rho_plot_base / vmax
     else:
         norm = TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax)
-        rho_plot = rho_plot_base
 
-    Hb2D, Ha2D = np.meshgrid(Hb_plot, Ha_plot, indexing="ij")
-    Hu = 0.5 * (Ha2D + Hb2D)   # Bu
-    Bc = 0.5 * (Ha2D - Hb2D)
+    # Optional plotting-only upsampling on the native Hb/Ha grid
+    upsample_factor = int(0 if upsample_factor is None else upsample_factor)
+    if upsample_factor > 1:
+        Hb_plot, Ha_plot, rho_plot_base = upsample_forc_grid(Hb0, Ha0, rho0, factor=upsample_factor)
+    else:
+        Hb_plot, Ha_plot, rho_plot_base = Hb0, Ha0, rho0
+
+    rho_plot = rho_plot_base / vmax if normalize_to_unit else rho_plot_base
+
+    # Centers for contours
+    Hb2D_c, Ha2D_c = np.meshgrid(Hb_plot, Ha_plot, indexing="ij")
+    Hu_cont = 0.5 * (Ha2D_c + Hb2D_c)
+    Bc_cont = 0.5 * (Ha2D_c - Hb2D_c)
+
+    # Edges for pcolormesh
+    Hb_edges = _centers_to_edges_1d(Hb_plot)
+    Ha_edges = _centers_to_edges_1d(Ha_plot)
+    Hb2D_e, Ha2D_e = np.meshgrid(Hb_edges, Ha_edges, indexing="ij")
+    Hu = 0.5 * (Ha2D_e + Hb2D_e)
+    Bc = 0.5 * (Ha2D_e - Hb2D_e)
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
     pm = ax.pcolormesh(Bc, Hu, rho_plot, shading="auto", cmap=cmap, norm=norm)
@@ -1699,30 +1705,17 @@ def plot_rho_HuHc(
             levels_low = _low_level_contours(low_level_frac) * float(vmax)
 
         if levels_main is not None:
-            ax.contour(
-                Bc, Hu, Zc,
-                levels=levels_main,
-                colors="k",
-                linewidths=contour_lw,
-                alpha=contour_alpha
-            )
+            ax.contour(Bc_cont, Hu_cont, Zc, levels=levels_main,
+                       colors="k", linewidths=contour_lw, alpha=contour_alpha)
 
         if show_low_level_contours and levels_low.size:
-            ax.contour(
-                Bc, Hu, Zc,
-                levels=levels_low,
-                colors=low_level_color,
-                linewidths=low_level_lw,
-                alpha=low_level_alpha
-            )
+            ax.contour(Bc_cont, Hu_cont, Zc, levels=levels_low,
+                       colors=low_level_color, linewidths=low_level_lw, alpha=low_level_alpha)
 
     ax.set_xlabel("Bc (T)")
     ax.set_ylabel("Bu (T)")
     ax.set_title(title)
 
-    # ---------------------------------------------------------
-    # Support Hc_min + Hc_max
-    # ---------------------------------------------------------
     x_left = 0.0 if Hc_min is None else float(Hc_min)
     if not np.isfinite(x_left):
         x_left = 0.0
@@ -1740,7 +1733,6 @@ def plot_rho_HuHc(
     else:
         ax.set_xlim(left=x_left)
 
-    # Hu limits
     if (Hu_min is not None) and (Hu_max is not None):
         c = 0.5 * (Hu_min + Hu_max)
         hw = 0.5 * (Hu_max - Hu_min) * float(hu_expand)
@@ -1757,10 +1749,8 @@ def plot_rho_HuHc(
 
     if show:
         plt.show()
-
     if close:
         plt.close(fig)
-
     if return_fig:
         return fig, ax, pm, cbar
     return None
@@ -1904,6 +1894,8 @@ def run_forc_pipeline(
     normalize_to_unit: bool = True,
     pct: float = 99.0,
     verbose: bool = True,
+    # Bu/Bc display control
+    display_upsample_factor: int = 0,
     # Regridding in (B,M) space
     do_regrid: bool = False,
     B_step: Optional[float] = None,
@@ -2100,8 +2092,11 @@ def run_forc_pipeline(
         show=True,
         close=False,
         return_fig=True,
-        upsample_factor=3,
-        edge_mask_hc_bins=1.0,
+        # backfill_to_hc0=False,
+        # backfill_hc_max=0.01,
+        # backfill_mode=LinearSegmentedColormap,
+        upsample_factor=display_upsample_factor,
+        edge_mask_hc_bins=0.0,
     )
 
     return {
@@ -2131,6 +2126,12 @@ def run_forc_pipeline(
         "dHb_used": dHb_used,
 
         "header_limits": {"Hb2": Hb2, "Hc2": Hc2},
+        # "display_settings": {
+        #     "backfill_to_hc0": backfill_to_hc0,
+        #     "backfill_hc_max": backfill_hc_max,
+        #     "backfill_mode": backfill_mode,
+        #     "display_upsample_factor": display_upsample_factor,
+        # },
         "plot_limits": {
             "Hu_min_lim": Hu_min_lim,
             "Hu_max_lim": Hu_max_lim,
@@ -3275,6 +3276,15 @@ def plot_custom_forc_profiles(
 
     fig, axes = plt.subplots(1, 2, figsize=figsize, dpi=dpi)
     ax = axes[0]
+    # ax.plot(Bc_axis_peak * 1e3, prof_bc_peak, lw=2, label=f"Peak Bu = {peak_Bu*1e3:.2f} mT")
+    ax.plot(Bc_axis_user * 1e3, prof_bc_user, lw=1, label=f"User Bu = {user_Bu*1e3:.2f} mT")
+    ax.axhline(0, color="k", lw=0.8, alpha=0.7)
+    ax.set_xlabel("Bc (mT)")
+    ax.set_ylabel(r"Normalized $\rho$")
+    ax.set_title(f"{sample_title} — Bc profiles")
+    ax.legend()
+    
+    ax = axes[1]
     # ax.plot(Bu_axis_peak * 1e3, prof_bu_peak, lw=2, label=f"Peak Bc = {peak_Bc*1e3:.2f} mT")
     ax.plot(Bu_axis_user * 1e3, prof_bu_user, lw=1, label=f"User Bc = {user_Bc*1e3:.2f} mT")
     ax.axvline(0, color="k", lw=0.8, ls="--", alpha=0.7)
@@ -3282,15 +3292,6 @@ def plot_custom_forc_profiles(
     ax.set_xlabel("Bu (mT)")
     ax.set_ylabel(r"Normalized $\rho$")
     ax.set_title(f"{sample_title} — Bu profiles")
-    ax.legend()
-
-    ax = axes[1]
-    # ax.plot(Bc_axis_peak * 1e3, prof_bc_peak, lw=2, label=f"Peak Bu = {peak_Bu*1e3:.2f} mT")
-    ax.plot(Bc_axis_user * 1e3, prof_bc_user, lw=1, label=f"User Bu = {user_Bu*1e3:.2f} mT")
-    ax.axhline(0, color="k", lw=0.8, alpha=0.7)
-    ax.set_xlabel("Bc (mT)")
-    ax.set_ylabel(r"Normalized $\rho$")
-    ax.set_title(f"{sample_title} — Bc profiles")
     ax.legend()
     fig.tight_layout()
 
@@ -3342,3 +3343,266 @@ def export_figure(
         plt.close(fig)
     return out_path
 
+
+
+# ============================================================
+# Unified mode wrapper + list-aware output helpers
+# ============================================================
+
+# Preserve the original single/stack implementation
+_run_forc_pipeline_core = run_forc_pipeline
+_export_current_figure_from_out_core = export_current_figure_from_out
+_plot_auto_forc_profiles_core = plot_auto_forc_profiles
+_plot_custom_forc_profiles_core = plot_custom_forc_profiles
+
+def _is_out_list(obj) -> bool:
+    return isinstance(obj, list)
+
+def _iter_outs(obj):
+    if isinstance(obj, list):
+        for item in obj:
+            yield item
+    else:
+        yield obj
+
+def _derive_common_sample_title(files) -> str:
+    """Best-effort common stem for stacked inputs."""
+    stems = [Path(f).stem for f in files]
+    if not stems:
+        return "stack"
+    if len(stems) == 1:
+        return stems[0]
+    common = os.path.commonprefix(stems)
+    common = common.rstrip(" _-.")
+    return common if common else "stack"
+
+def run_forc_pipeline(
+    path: str,
+    sample_title: Optional[str] = None,
+    mode: str = "i",
+    file_type: str = "*.txt",
+    stack_method: str = "mean",
+    **kwargs,
+):
+    """
+    Unified public pipeline.
+
+    Parameters
+    ----------
+    mode : {"i", "s", "b"}
+        i = single file
+        s = stacked processing over matching files in a directory
+        b = batch processing of each matching file in a directory
+    file_type : str
+        Glob used to discover files for stack/batch modes.
+    sample_title : str or None
+        Optional explicit override. When None or blank, titles are derived automatically:
+          i = filename stem
+          b = each filename stem
+          s = common stem across matched files
+    """
+    mode_l = str(mode).strip().lower()
+    if mode_l not in {"i", "s", "b"}:
+        raise ValueError("mode must be 'i', 's', or 'b'.")
+
+    # Backward-compatibility: ignore legacy args if passed
+    kwargs.pop("stack", None)
+    kwargs.pop("stack_glob", None)
+
+    user_title = None if sample_title is None else str(sample_title).strip()
+    if user_title == "":
+        user_title = None
+
+    if mode_l == "i":
+        auto_title = Path(path).stem
+        return _run_forc_pipeline_core(
+            path=path,
+            sample_title=user_title or auto_title,
+            stack=False,
+            stack_glob=file_type,
+            stack_method=stack_method,
+            **kwargs,
+        )
+
+    if mode_l == "s":
+        files = _list_stack_input_files(
+            path=path,
+            stack=True,
+            stack_glob=file_type,
+            verbose=bool(kwargs.get("verbose", True)),
+        )
+        auto_title = _derive_common_sample_title(files)
+        return _run_forc_pipeline_core(
+            path=path,
+            sample_title=user_title or auto_title,
+            stack=True,
+            stack_glob=file_type,
+            stack_method=stack_method,
+            **kwargs,
+        )
+
+    # Batch mode
+    files = _list_stack_input_files(
+        path=path,
+        stack=True,
+        stack_glob=file_type,
+        verbose=bool(kwargs.get("verbose", True)),
+    )
+    outs = []
+    for fp in files:
+        auto_title = Path(fp).stem
+        one_out = _run_forc_pipeline_core(
+            path=str(fp),
+            sample_title=user_title or auto_title,
+            stack=False,
+            stack_glob=file_type,
+            stack_method=stack_method,
+            **kwargs,
+        )
+        outs.append(one_out)
+    return outs
+
+def export_current_figure_from_out(
+    out,
+    filename: Optional[str] = None,
+    dpi: int = 300,
+    close: bool = False,
+):
+    """
+    Export the main FORC figure(s) from run_forc_pipeline(...) output.
+
+    Accepts either:
+      - a single output dict
+      - a list of output dicts (batch mode)
+    """
+    if _is_out_list(out):
+        paths = []
+        for one_out in out:
+            paths.append(
+                _export_current_figure_from_out_core(
+                    one_out, filename=None, dpi=dpi, close=close
+                )
+            )
+        return paths
+    return _export_current_figure_from_out_core(out, filename=filename, dpi=dpi, close=close)
+
+def plot_auto_forc_profiles(
+    out,
+    smooth_sigma_bins: Optional[float] = 1.0,
+    pct: float = 100.0,
+    rho_frac_cutoff: float = 0.01,
+    n_centers: int = 200,
+    export_txt: bool = True,
+    export_png: bool = True,
+    print_summary: bool = True,
+    title_prefix: Optional[str] = None,
+    figsize: Tuple[float, float] = (10.5, 4.5),
+    dpi=120,
+    export_dpi=300,
+    return_data: bool = False,
+):
+    """
+    List-aware wrapper for automatic profile plotting.
+    """
+    if _is_out_list(out):
+        results = []
+        for one_out in out:
+            results.append(
+                _plot_auto_forc_profiles_core(
+                    one_out,
+                    smooth_sigma_bins=smooth_sigma_bins,
+                    pct=pct,
+                    rho_frac_cutoff=rho_frac_cutoff,
+                    n_centers=n_centers,
+                    export_txt=export_txt,
+                    export_png=export_png,
+                    print_summary=print_summary,
+                    title_prefix=title_prefix,
+                    figsize=figsize,
+                    dpi=dpi,
+                    export_dpi=export_dpi,
+                    return_data=return_data,
+                )
+            )
+        return results if return_data else None
+
+    return _plot_auto_forc_profiles_core(
+        out,
+        smooth_sigma_bins=smooth_sigma_bins,
+        pct=pct,
+        rho_frac_cutoff=rho_frac_cutoff,
+        n_centers=n_centers,
+        export_txt=export_txt,
+        export_png=export_png,
+        print_summary=print_summary,
+        title_prefix=title_prefix,
+        figsize=figsize,
+        dpi=dpi,
+        export_dpi=export_dpi,
+        return_data=return_data,
+    )
+
+def plot_custom_forc_profiles(
+    out,
+    user_Bu: float = 0.0,
+    user_Bc: float = 0.02,
+    smooth_sigma_bins: Optional[float] = 1.0,
+    pct: float = 100.0,
+    rho_frac_cutoff: float = 0.01,
+    n_centers: int = 200,
+    n_profile_pts: int = 400,
+    export_txt: bool = False,
+    export_custom_txt: bool = True,
+    export_png: bool = True,
+    print_summary: bool = True,
+    figsize: Tuple[float, float] = (10.5, 4.5),
+    dpi: int = 120,
+    export_dpi: int = 300,
+    return_data: bool = False,
+):
+    """
+    List-aware wrapper for custom profile plotting.
+    """
+    if _is_out_list(out):
+        results = []
+        for one_out in out:
+            results.append(
+                _plot_custom_forc_profiles_core(
+                    one_out,
+                    user_Bu=user_Bu,
+                    user_Bc=user_Bc,
+                    smooth_sigma_bins=smooth_sigma_bins,
+                    pct=pct,
+                    rho_frac_cutoff=rho_frac_cutoff,
+                    n_centers=n_centers,
+                    n_profile_pts=n_profile_pts,
+                    export_txt=export_txt,
+                    export_custom_txt=export_custom_txt,
+                    export_png=export_png,
+                    print_summary=print_summary,
+                    figsize=figsize,
+                    dpi=dpi,
+                    export_dpi=export_dpi,
+                    return_data=return_data,
+                )
+            )
+        return results if return_data else None
+
+    return _plot_custom_forc_profiles_core(
+        out,
+        user_Bu=user_Bu,
+        user_Bc=user_Bc,
+        smooth_sigma_bins=smooth_sigma_bins,
+        pct=pct,
+        rho_frac_cutoff=rho_frac_cutoff,
+        n_centers=n_centers,
+        n_profile_pts=n_profile_pts,
+        export_txt=export_txt,
+        export_custom_txt=export_custom_txt,
+        export_png=export_png,
+        print_summary=print_summary,
+        figsize=figsize,
+        dpi=dpi,
+        export_dpi=export_dpi,
+        return_data=return_data,
+    )
