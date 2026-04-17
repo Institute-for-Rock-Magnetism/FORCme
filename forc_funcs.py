@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import csv
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from datetime import datetime
 from typing import List, Dict, Optional, Tuple, Union
 
 import numpy as np
@@ -138,6 +140,176 @@ def get_forc_figures_dir(out: Dict[str, object]) -> Path:
     out_dir = get_forc_output_base_dir(out) / "FORC_figures"
     out_dir.mkdir(parents=True, exist_ok=True)
     return out_dir
+
+
+# ============================================================
+# MagIC measurement export
+# ============================================================
+
+MAGIC_MEASUREMENT_HEADERS = [
+    "row_id", "measurement", "experiment", "specimen", "sequence", "standard", "quality",
+    "method_codes", "instrument_codes", "display_order", "result_type", "citations",
+    "treat_temp", "treat_temp_decay_rate", "treat_temp_dc_on", "treat_temp_dc_off",
+    "treat_ac_field", "treat_ac_field_decay_rate", "treat_ac_field_dc_on", "treat_ac_field_dc_off",
+    "treat_dc_field", "treat_dc_field_decay_rate", "treat_dc_field_ac_on", "treat_dc_field_ac_off",
+    "treat_dc_field_theta", "treat_dc_field_phi", "treat_mw_power", "treat_mw_time",
+    "treat_mw_integral", "treat_mw_step", "treat_step_num", "meas_pos_x", "meas_pos_y",
+    "meas_pos_z", "meas_orient_theta", "meas_orient_phi", "meas_n_orient", "meas_temp",
+    "meas_temp_change", "meas_freq", "meas_duration", "meas_field_ac", "meas_field_ac_theta",
+    "meas_field_ac_phi", "meas_field_dc", "meas_field_dc_theta", "meas_field_dc_phi",
+    "inversion_height", "inversion_residuals", "magn_moment", "magn_x", "magn_x_sigma", "magn_y",
+    "magn_y_sigma", "magn_z", "magn_z_sigma", "magn_xyz_sigma", "magn_induction", "magn_b_x",
+    "magn_b_x_sigma", "magn_b_y", "magn_b_y_sigma", "magn_b_z", "magn_b_z_sigma", "magn_b_111",
+    "magn_b_111_sigma", "magn_b_xyz_sigma", "magn_r2_det", "dir_dec", "dir_inc", "dir_csd",
+    "magn_volume", "magn_mass", "magn_uncal", "aniso_type", "aniso_s", "hyst_loop",
+    "hyst_sweep_rate", "hyst_charging_mode", "susc_chi_volume", "susc_chi_mass",
+    "susc_chi_qdr_volume", "susc_chi_qdr_mass", "description", "timestamp", "software_packages",
+    "files", "external_database_ids", "derived_value", "analysts",
+]
+
+def _magic_basename(path: PathLike) -> str:
+    return as_path(path).stem.replace(" ", "-")
+
+def _magic_timestamp_now() -> str:
+    return datetime.now().strftime("%m/%d/%Y %H:%M")
+
+def _read_numeric_groups_by_blanklines(path: PathLike, data_start_idx: Optional[int] = None) -> List[List[Tuple[float, float]]]:
+    """
+    Read the raw FORC numeric section and split it into contiguous numeric groups
+    separated by one or more blank lines.
+
+    This matches the export structure described by the user:
+      group 1 = calibration line for block 1
+      group 2 = FORC measurement lines for block 1
+      group 3 = calibration line for block 2
+      group 4 = FORC measurement lines for block 2
+      etc.
+    """
+    txt = _read_text_normalized(path)
+    lines = txt.split("\n")
+
+    if data_start_idx is None:
+        _, data_start_idx = read_header_tags_and_data_start(path)
+
+    groups: List[List[Tuple[float, float]]] = []
+    cur: List[Tuple[float, float]] = []
+
+    for line in lines[data_start_idx:]:
+        s = line.strip()
+        if s == "":
+            if cur:
+                groups.append(cur)
+                cur = []
+            continue
+        if _is_numeric_line(s):
+            cur.append(_parse_numeric_line(s))
+
+    if cur:
+        groups.append(cur)
+
+    return groups
+
+def build_magic_rows_from_raw_groups(
+    path: PathLike,
+    groups: List[List[Tuple[float, float]]],
+    meas_temp_k: Optional[float] = None,
+) -> List[Dict[str, object]]:
+    """
+    Convert raw blank-line-delimited groups into MagIC measurement rows.
+
+    The interpretation is intentionally simple and follows the user's stated
+    file structure:
+      odd-numbered groups (1,3,5,...)  -> calibration groups, written as n-0
+      following even-numbered groups   -> FORC data groups, written as n-1, n-2, ...
+
+    This does not depend on later internal segmentation.
+    """
+    basename = _magic_basename(path)
+    experiment = f"LP-FORC-{basename}"
+    specimen = basename
+    timestamp = _magic_timestamp_now()
+    source_file = as_path(path).name
+
+    rows: List[Dict[str, object]] = []
+    treat_step_num = 0
+
+    def blank_row() -> Dict[str, str]:
+        return {h: "" for h in MAGIC_MEASUREMENT_HEADERS}
+
+    def append_row(measurement_name: str, hval: float, mval: float) -> None:
+        nonlocal treat_step_num
+        treat_step_num += 1
+        row = blank_row()
+        row["measurement"] = measurement_name
+        row["experiment"] = experiment
+        row["specimen"] = specimen
+        row["standard"] = "u"
+        row["quality"] = "g"
+        row["method_codes"] = "LP-FORC"
+        row["treat_step_num"] = str(treat_step_num)
+        row["meas_temp"] = "" if meas_temp_k is None else f"{float(meas_temp_k):.12g}"
+        row["meas_field_dc"] = f"{float(hval):.12g}"
+        row["magn_uncal"] = f"{float(mval):.12g}"
+        row["timestamp"] = timestamp
+        row["files"] = source_file
+        rows.append(row)
+
+    block_num = 0
+    i = 0
+    while i < len(groups):
+        cal_group = groups[i]
+        if len(cal_group) == 0:
+            i += 1
+            continue
+
+        block_num += 1
+
+        # calibration group: write every row as block-0 if somehow more than one point,
+        # but in normal files this should be exactly one row.
+        for k, (h, m) in enumerate(cal_group):
+            if k == 0:
+                append_row(f"{experiment}-{block_num}-0", h, m)
+            else:
+                # defensive fallback: additional rows in the calibration group
+                append_row(f"{experiment}-{block_num}-{k}", h, m)
+
+        if i + 1 < len(groups):
+            forc_group = groups[i + 1]
+            for j, (h, m) in enumerate(forc_group, start=1):
+                append_row(f"{experiment}-{block_num}-{j}", h, m)
+            i += 2
+        else:
+            i += 1
+
+    return rows
+
+def export_magic_measurements_from_raw(
+    path: PathLike,
+    data_start_idx: Optional[int] = None,
+    meas_temp_k: Optional[float] = None,
+    out_dir: Optional[PathLike] = None,
+) -> Path:
+    """
+    Write a tab-delimited MagIC-style measurement table by reparsing the raw
+    FORC file into blank-line-delimited groups.
+    """
+    p = as_path(path)
+    out_dir = p.parent if out_dir is None else as_path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_name = safe_filename(f"{_magic_basename(path)}_MagIC.txt")
+    out_path = out_dir / out_name
+
+    groups = _read_numeric_groups_by_blanklines(path, data_start_idx=data_start_idx)
+    rows = build_magic_rows_from_raw_groups(path, groups, meas_temp_k=meas_temp_k)
+
+    with open(out_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, delimiter="\t", lineterminator="\n")
+        writer.writerow(MAGIC_MEASUREMENT_HEADERS)
+        for row in rows:
+            writer.writerow([row.get(h, "") for h in MAGIC_MEASUREMENT_HEADERS])
+
+    return out_path
 
 # ============================================================
 # File reading / header parsing
@@ -573,6 +745,7 @@ def phase1_prepare_segments_dual(
     blank_sep: int = 2,
     jump_T: float = 0.05,
     cal_drop_T: float = 0.02,
+    export_magic: bool = True,
     verbose: bool = True,
 ) -> Tuple[List[Segment], List[Segment]]:
     """
@@ -597,6 +770,20 @@ def phase1_prepare_segments_dual(
         cal_drop_T=cal_drop_T,
         verbose=verbose,
     )
+
+    # Export MagIC directly from the raw file structure using blank-line-
+    # delimited numeric groups. This is independent of later internal FORC
+    # segmentation and drift correction.
+    try:
+        meas_temp_k = float(tags["Temperature"]) if "Temperature" in tags else None
+        export_magic_measurements_from_raw(
+            path,
+            data_start_idx=data_start_idx,
+            meas_temp_k=meas_temp_k,
+        )
+    except Exception as e:
+        if verbose:
+            print(f"Warning: MagIC export failed for {path}: {e}")
 
     segs = split_cal_first_point(segs, HCal=HCal, tol_T=cal_tol_T)
 
@@ -659,9 +846,12 @@ def _list_stack_input_files(
     pattern = "*.txt" if stack_glob is None else str(stack_glob)
     files = sorted([f for f in p.glob(pattern) if f.is_file()])
 
+    # Never treat generated MagIC exports as input FORC files.
+    files = [f for f in files if not f.name.endswith("_MagIC.txt")]
+
     if not files:
         raise FileNotFoundError(
-            f"No files matched pattern {pattern!r} in directory: {p}"
+            f"No non-MagIC files matched pattern {pattern!r} in directory: {p}"
         )
 
     if verbose:
@@ -685,6 +875,7 @@ def _prepare_single_input_for_rho(
     B_step: Optional[float] = None,
     regrid_method: str = "linear",
     regrid_extrapolate: bool = False,
+    export_magic: bool = True,
     verbose: bool = True,
 ) -> Dict[str, object]:
     """
@@ -704,6 +895,7 @@ def _prepare_single_input_for_rho(
         blank_sep=blank_sep,
         jump_T=jump_T,
         cal_drop_T=cal_drop_T,
+        export_magic=export_magic,
         verbose=verbose,
     )
 
@@ -1944,6 +2136,7 @@ def run_forc_pipeline(
             B_step=B_step,
             regrid_method=regrid_method,
             regrid_extrapolate=regrid_extrapolate,
+            export_magic=(not stack),
             verbose=verbose,
         )
         for p in input_files
