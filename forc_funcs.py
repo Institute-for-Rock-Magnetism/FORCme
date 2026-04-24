@@ -2066,6 +2066,7 @@ def run_forc_pipeline(
     show_contours: bool = True,
     figsize: Tuple[float, float] = (7, 6),
     dpi: int = 120,
+    export_dpi: int = 300,
     hu_expand: float = 1.0,
     # header/axis limits
     Hu_min: Optional[float] = None,
@@ -2337,6 +2338,9 @@ def run_forc_pipeline(
             "span_Hb_T_used": span_Hb,
             "min_pts_used": min_pts,
         },
+
+        "dpi": int(dpi) if dpi is not None else 120,
+        "export_dpi": int(export_dpi) if export_dpi is not None else 300,
     }
 
 # ============================================================
@@ -2672,7 +2676,7 @@ def plot_profiles_multifig(
 
     bc0 = float(default_profiles.get("bc0", np.nan))
     bu0 = float(default_profiles.get("bu0", np.nan))
-    ax.set_title(f"{title_prefix}Default: Horizontal at Bu = {bu0:.4g} T".strip())
+    ax.set_title(f"{title_prefix}Default: Horizontal at Bu = {bu0:.4g} T".strip(), fontsize=10)
 
     if show_annotations and np.isfinite(bc0):
         # show the intersection Bc from the 2D max (matches the vertical slice Bc)
@@ -2700,7 +2704,7 @@ def plot_profiles_multifig(
 
     # Use the *target* Bu for the title (NOT the peak)
     target_bu = float(user_prof_horizontal.get("target", np.nan))
-    ax.set_title(f"{title_prefix}User: Horizontal at Bu = {target_bu:.6g} T".strip())
+    ax.set_title(f"{title_prefix}User: Horizontal at Bu = {target_bu:.6g} T".strip(), fontsize=10)
 
     if show_annotations:
         pk = user_prof_horizontal.get("peak", {})
@@ -2718,7 +2722,7 @@ def plot_profiles_multifig(
     ax.set_xlim(rng["Bu_min"], rng["Bu_max"])
     ax.set_xlabel("Bu (T)")
     ax.set_ylabel(r"$\rho$")
-    ax.set_title(f"{title_prefix}Default: Vertical at Bc = {bc0:.4g} T".strip())
+    ax.set_title(f"{title_prefix}Default: Vertical at Bc = {bc0:.4g} T".strip(), fontsize=10)
 
     if show_annotations:
         pk = default_profiles.get("vertical_peak", {})
@@ -2744,7 +2748,7 @@ def plot_profiles_multifig(
 
     # Use the *target* Bc for the title (NOT peak)
     target_bc = float(user_prof_vertical.get("target", np.nan))
-    ax.set_title(f"{title_prefix}User: Vertical at Bc = {target_bc:.6g} T".strip())
+    ax.set_title(f"{title_prefix}User: Vertical at Bc = {target_bc:.6g} T".strip(), fontsize=10)
 
     if show_annotations:
         pk = user_prof_vertical.get("peak", {})
@@ -2759,6 +2763,7 @@ def plot_profiles_multifig(
 
     # consistent plotting-area feel
     fig.subplots_adjust(left=0.0, right=1.0, bottom=0.0, top=1.0, wspace=0.2, hspace=0.3)
+    fig.tight_layout()
     plt.show()
 
 def find_bounded_peak_rho(Hb_vals, Ha_vals, rho, Bu_min=None, Bu_max=None, Bc_min=None, Bc_max=None):
@@ -2972,7 +2977,7 @@ def plot_bounded_peak_profiles(
     ax.set_xlim(float(prof_bc["x_min"]), float(prof_bc["x_max"]))
     ax.set_xlabel("Bc (T)")
     ax.set_ylabel(r"$\rho$")
-    ax.set_title(f"{title_prefix}Horizontal at Bu = {float(prof_bc['target']):.6g} T".strip())
+    ax.set_title(f"{title_prefix}Horizontal at Bu = {float(prof_bc['target']):.6g} T".strip(), fontsize=10)
 
     pk = prof_bc.get("peak", {})
     peak_bc = float(pk.get("peak_x", np.nan))
@@ -2980,8 +2985,8 @@ def plot_bounded_peak_profiles(
     if np.isfinite(peak_bc):
         ax.axvline(peak_bc, ls="--", lw=1.0, color="0.5", alpha=0.9)
         ax.text(
-            0.68, 0.95,
-            f"Peak Bc = {peak_bc:.4g} T\nrho(max) = {peak_rho_bc:.4g}",
+            0.4, 0.98,
+            f"Peak Bc = {peak_bc:.4f} T\nrho(max) = {peak_rho_bc:.4f}",
             transform=ax.transAxes,
             va="top", ha="left",
         )
@@ -2991,12 +2996,12 @@ def plot_bounded_peak_profiles(
     x = np.asarray(prof_bu["x"], float)
     y = np.asarray(prof_bu["y"], float)
     ax.plot(x, y, lw=1)
-    ax.axvline(0, ls="--", lw=1.0, color="k", alpha=0.9)
     ax.axhline(0, ls="--", lw=0.8, color="0.4", alpha=0.8)
+    ax.axvline(0, ls="--", lw=0.8, color="0.4", alpha=0.8)
     ax.set_xlim(float(prof_bu["x_min"]), float(prof_bu["x_max"]))
     ax.set_xlabel("Bu (T)")
     ax.set_ylabel(r"$\rho$")
-    ax.set_title(f"{title_prefix}Vertical at Bc = {float(prof_bu['target']):.6g} T".strip())
+    ax.set_title(f"{title_prefix}Vertical at Bc = {float(prof_bu['target']):.6g} T".strip(), fontsize=10)
 
     pk = prof_bu.get("peak", {})
     peak_bu = float(pk.get("peak_x", np.nan))
@@ -3004,10 +3009,10 @@ def plot_bounded_peak_profiles(
     fwhm = float(pk.get("fwhm", np.nan))
     if np.isfinite(peak_bu):
         ax.axvline(peak_bu, ls="--", lw=1.0, color="0.5", alpha=0.9)
-        txt = f"Peak Bu = {peak_bu:.4g} T\nrho(max) = {peak_rho_bu:.4g}"
+        txt = f"Peak Bu = {peak_bu:.4f} T\nrho(max) = {peak_rho_bu:.4f}"
         if np.isfinite(fwhm):
-            txt += f"\nFWHM = {fwhm:.4g} T"
-        ax.text(0.68, 0.95, txt, transform=ax.transAxes, va="top", ha="left")
+            txt += f"\nFWHM = {fwhm:.4f} T"
+        ax.text(0.68, 0.98, txt, transform=ax.transAxes, va="top", ha="left")
 
     fig.subplots_adjust(left=0.08, right=0.98, bottom=0.12, top=0.88, wspace=0.25)
     if show:
@@ -3015,6 +3020,75 @@ def plot_bounded_peak_profiles(
     if return_fig:
         return fig
     return None
+
+def _profile_peak_info(x, y):
+    """
+    Return peak position/value and FWHM information for a 1D profile.
+    """
+    x = np.asarray(x, float)
+    y = np.asarray(y, float)
+    ok = np.isfinite(x) & np.isfinite(y)
+    if ok.sum() < 3:
+        return {
+            "peak_x": np.nan,
+            "peak_y": np.nan,
+            "half_y": np.nan,
+            "left_x": np.nan,
+            "right_x": np.nan,
+            "fwhm": np.nan,
+        }
+
+    x = x[ok]
+    y = y[ok]
+
+    i_pk = int(np.nanargmax(y))
+    peak_x = float(x[i_pk])
+    peak_y = float(y[i_pk])
+
+    if (not np.isfinite(peak_y)) or peak_y <= 0:
+        return {
+            "peak_x": peak_x,
+            "peak_y": peak_y,
+            "half_y": np.nan,
+            "left_x": np.nan,
+            "right_x": np.nan,
+            "fwhm": np.nan,
+        }
+
+    half_y = 0.5 * peak_y
+
+    left_x = np.nan
+    for i in range(i_pk, 0, -1):
+        y0, y1 = y[i - 1], y[i]
+        if np.isfinite(y0) and np.isfinite(y1) and ((y0 <= half_y <= y1) or (y1 <= half_y <= y0)):
+            if y1 != y0:
+                t = (half_y - y0) / (y1 - y0)
+                left_x = float(x[i - 1] + t * (x[i] - x[i - 1]))
+            else:
+                left_x = float(x[i])
+            break
+
+    right_x = np.nan
+    for i in range(i_pk, len(y) - 1):
+        y0, y1 = y[i], y[i + 1]
+        if np.isfinite(y0) and np.isfinite(y1) and ((y0 >= half_y >= y1) or (y1 >= half_y >= y0)):
+            if y1 != y0:
+                t = (half_y - y0) / (y1 - y0)
+                right_x = float(x[i] + t * (x[i + 1] - x[i]))
+            else:
+                right_x = float(x[i])
+            break
+
+    fwhm = float(right_x - left_x) if np.isfinite(left_x) and np.isfinite(right_x) else np.nan
+
+    return {
+        "peak_x": peak_x,
+        "peak_y": peak_y,
+        "half_y": float(half_y),
+        "left_x": left_x,
+        "right_x": right_x,
+        "fwhm": fwhm,
+    }
 
 def plot_bu_offset_tracking(bundle, title="Tracking Bu offset with coercivity", figsize=(6.8, 4.8), dpi=120):
     """
@@ -3067,27 +3141,42 @@ def _safe_filename(name: str) -> str:
     return name if name else "FORC_output"
 
 def export_current_figure_from_out(
-    out: Dict[str, object],
+    out,
     filename: Optional[str] = None,
-    dpi: int = 300,
+    dpi: Optional[int] = None,
     close: bool = False,
-) -> Path:
+):
     """
-    Export the main FORC figure from run_forc_pipeline(...) output
-    into stack_dir/FORC_figures.
+    Export the main FORC figure(s) from run_forc_pipeline(...) output.
+
+    Accepts either:
+      - a single output dict
+      - a list of output dicts (batch mode)
+
+    If dpi is None, uses out['export_dpi'] when present, otherwise 300.
     """
-    fig = out.get("fig_rho", None)
-    if fig is None:
-        raise ValueError("No 'fig_rho' found in out.")
+    if isinstance(out, list):
+        paths = []
+        for one_out in out:
+            one_filename = None
+            if filename is not None and len(out) == 1:
+                one_filename = filename
+            paths.append(
+                _export_current_figure_single(
+                    one_out,
+                    filename=one_filename,
+                    dpi=dpi,
+                    close=close,
+                )
+            )
+        return paths
 
-    figures_dir = get_forc_figures_dir(out)
-
-    if filename is None:
-        filename = f"{out.get('sample_title', 'Sample')}_FORC.png"
-
-    out_path = export_figure(fig, filename=filename, out_dir=figures_dir, dpi=dpi, close=close)
-    print(f"Saved: {out_path}")
-    return out_path
+    return _export_current_figure_single(
+        out,
+        filename=filename,
+        dpi=dpi,
+        close=close,
+    )
 
 def _profile_to_arrays(profile):
     """
@@ -3349,7 +3438,7 @@ def plot_custom_forc_profiles(
     print_summary: bool = True,
     figsize: Tuple[float, float] = (10.5, 4.5),
     dpi: int = 120,
-    export_dpi: int = 300,
+    export_dpi: Optional[int] = None,
     return_data: bool = False,
 ):
     Hb_vals = np.asarray(out.get("Hb_vals_used"), float)
@@ -3363,13 +3452,14 @@ def plot_custom_forc_profiles(
 
     sample_title = out.get("sample_title", "Sample")
     profiles_dir = get_forc_profiles_dir(out)
+    export_dpi = int(out.get("export_dpi", 300)) if export_dpi is None else int(export_dpi)
 
     def _export_xy_profile_txt(x, y, specimen_name, suffix, xlabel, ylabel="rho_norm", out_dir=None) -> Path:
         filename = safe_filename(f"{specimen_name}_{suffix}") + ".txt"
         out_path = as_path(out_dir) / filename if out_dir is not None else as_path(filename)
         ensure_parent_dir(out_path)
         arr = np.column_stack([np.asarray(x, float), np.asarray(y, float)])
-        np.savetxt(out_path, arr, fmt="%.10g", delimiter="\t", header=f"{xlabel}\t{ylabel}", comments="")
+        np.savetxt(out_path, arr, fmt="%.10g", delimiter="	", header=f"{xlabel}	{ylabel}", comments="")
         return out_path
 
     vmax_win = _rho_window_vmax_bu_bc(
@@ -3394,9 +3484,6 @@ def plot_custom_forc_profiles(
         dpi=dpi,
     )
 
-    # if print_summary:
-    #     print_bounded_peak_summary(bundle)
-
     if export_txt:
         export_forc_profiles_txt(bundle, specimen_name=sample_title, out_dir=profiles_dir)
 
@@ -3420,12 +3507,6 @@ def plot_custom_forc_profiles(
     peak_Bu = float(Bu2D.ravel()[imax])
     peak_Bc = float(Bc2D.ravel()[imax])
     peak_rho = float(rho_u.ravel()[imax])
-
-    # if print_summary:
-    #     print("\nBounded peak used for default profiles:")
-    #     print(f"  Peak Bu = {peak_Bu:.6f} T")
-    #     print(f"  Peak Bc = {peak_Bc:.6f} T")
-    #     print(f"  Peak rho = {peak_rho:.6f}")
 
     interp = RegularGridInterpolator((Hb_vals, Ha_vals), rho_u, bounds_error=False, fill_value=np.nan)
 
@@ -3457,6 +3538,19 @@ def plot_custom_forc_profiles(
     Bc_axis_peak, prof_bc_peak = _sample_bc_profile_at_bu(peak_Bu, Bc_min_lim, Bc_max_lim, npts=n_profile_pts)
     Bc_axis_user, prof_bc_user = _sample_bc_profile_at_bu(user_Bu, Bc_min_lim, Bc_max_lim, npts=n_profile_pts)
 
+    peak_profile_bc = _profile_peak_info(Bc_axis_peak, prof_bc_peak)
+    peak_profile_bu = _profile_peak_info(Bu_axis_peak, prof_bu_peak)
+    user_profile_bc = _profile_peak_info(Bc_axis_user, prof_bc_user)
+    user_profile_bu = _profile_peak_info(Bu_axis_user, prof_bu_user)
+
+    peak_profile_Bc = float(peak_profile_bc.get("peak_x", np.nan))
+    peak_profile_Bu = float(peak_profile_bu.get("peak_x", np.nan))
+    peak_profile_FWHM = float(peak_profile_bu.get("fwhm", np.nan))
+
+    user_profile_Bc = float(user_profile_bc.get("peak_x", np.nan))
+    user_profile_Bu = float(user_profile_bu.get("peak_x", np.nan))
+    user_profile_FWHM = float(user_profile_bu.get("fwhm", np.nan))
+
     custom_export_paths = {}
     if export_custom_txt:
         specimen_name_custom = f"{sample_title}_custom"
@@ -3467,26 +3561,93 @@ def plot_custom_forc_profiles(
             print(f"Saved custom Bu profile to: {p1}")
             print(f"Saved custom Bc profile to: {p2}")
 
+    if print_summary:
+        # print("\nBounded peak inside plot window:")
+        # print(f"  Peak Bu = {peak_Bu:.6f} T")
+        # print(f"  Peak Bc = {peak_Bc:.6f} T")
+        # print(f"  Peak rho = {peak_rho:.6f}")
+        # if np.isfinite(peak_profile_Bu):
+        #     print(f"  Peak profile Bu = {peak_profile_Bu:.6f} T")
+        # if np.isfinite(peak_profile_Bc):
+        #     print(f"  Peak profile Bc = {peak_profile_Bc:.6f} T")
+        # if np.isfinite(peak_profile_FWHM):
+        #     print(f"  Peak Bu-profile FWHM = {peak_profile_FWHM:.6f} T")
+        if np.isfinite(user_profile_Bu) or np.isfinite(user_profile_Bc) or np.isfinite(user_profile_FWHM):
+            print("\nCustom profiles:")
+            if np.isfinite(user_profile_Bu):
+                print(f"  Custom profile Peak Bu = {user_profile_Bu:.6f} T")
+            if np.isfinite(user_profile_Bc):
+                print(f"  Custom profile Peak Bc = {user_profile_Bc:.6f} T")
+            if np.isfinite(user_profile_FWHM):
+                print(f"  Custom Bu-profile FWHM = {user_profile_FWHM:.6f} T")
+
     fig, axes = plt.subplots(1, 2, figsize=figsize, dpi=dpi)
+
     ax = axes[0]
-    # ax.plot(Bc_axis_peak * 1e3, prof_bc_peak, lw=2, label=f"Peak Bu = {peak_Bu*1e3:.2f} mT")
-    ax.plot(Bc_axis_user * 1e3, prof_bc_user, lw=1, label=f"User Bu = {user_Bu*1e3:.2f} mT")
-    ax.axhline(0, color="k", lw=0.8, alpha=0.7)
-    ax.set_xlabel("Bc (mT)")
+    # ax.plot(Bc_axis_peak * 1e3, prof_bc_peak, ls="--", lw=1.5, color="0.5",
+    #         label=f"Peak Bu slice at Bu={peak_Bu:.2f} T")
+    ax.plot(Bc_axis_user, prof_bc_user, lw=1.2)
+    ax.axhline(0, ls="--", lw=0.8, color="0.4", alpha=0.8)
+    ax.axvline(0, ls="--", lw=0.8, color="0.4", alpha=0.8)
+    ax.set_xlim(Bc_min_lim, Bc_max_lim)
+    # if np.isfinite(peak_profile_Bc):
+    #     ax.axvline(peak_profile_Bc, ls="--", lw=1.2, color="0.5", alpha=0.9)
+    if np.isfinite(user_profile_Bc):
+        ax.axvline(user_profile_Bc, ls="--", lw=1.0, color="0.5", alpha=0.9)
+    txt_bc = []
+    # if np.isfinite(peak_profile_Bc):
+    #     txt_bc.append(f"Peak Bc = {peak_profile_Bc:.2f} T")
+    if np.isfinite(user_profile_Bc):
+        # txt_bc.append(f"Custom Bc slice at Bu={user_Bu:.4g} T")
+        txt_bc.append(f"Peak Bc = {user_profile_Bc:.4f} T")
+    if txt_bc:
+        ax.text(
+            0.4, 0.98, "\n".join(txt_bc),
+            transform=ax.transAxes,
+            va="top", ha="left",
+        )
+    ax.set_xlabel("Bc (T)")
     ax.set_ylabel(r"Normalized $\rho$")
-    ax.set_title(f"{sample_title} — Bc profiles")
-    ax.legend()
-    
+    ax.set_title(f"{sample_title} - Horizontal at Bu = {user_Bu:.6g} T".strip(), fontsize=10)
+    # ax.legend()
+
     ax = axes[1]
-    # ax.plot(Bu_axis_peak * 1e3, prof_bu_peak, lw=2, label=f"Peak Bc = {peak_Bc*1e3:.2f} mT")
-    ax.plot(Bu_axis_user * 1e3, prof_bu_user, lw=1, label=f"User Bc = {user_Bc*1e3:.2f} mT")
-    ax.axvline(0, color="k", lw=0.8, ls="--", alpha=0.7)
-    ax.axhline(0, color="k", lw=0.8, alpha=0.7)
-    ax.set_xlabel("Bu (mT)")
+    # ax.plot(Bu_axis_peak * 1e3, prof_bu_peak, ls="--", lw=1.5, color="0.5",
+    #         label=f"Peak Bc slice at Bc={peak_Bc*1e3:.2f} mT")
+    ax.plot(Bu_axis_user, prof_bu_user, lw=1.2)
+    ax.axhline(0, ls="--", lw=0.8, color="0.4", alpha=0.8)
+    ax.axvline(0, ls="--", lw=0.8, color="0.4", alpha=0.8)
+    ax.set_xlim(Bu_min_lim, Bu_max_lim)
+    # if np.isfinite(peak_profile_Bu):
+    #     ax.axvline(peak_profile_Bu, ls="--", lw=1.2, color="0.5", alpha=0.9)
+    if np.isfinite(user_profile_Bu):
+        ax.axvline(user_profile_Bu, ls="--", lw=1.0, color="0.5", alpha=0.9)
+    # if np.isfinite(user_profile_FWHM):
+    #     x_left = float(user_profile_bu.get("left_x", np.nan))
+    #     x_right = float(user_profile_bu.get("right_x", np.nan))
+    #     half_y = float(user_profile_bu.get("half_y", np.nan))
+    #     if np.isfinite(x_left) and np.isfinite(x_right) and np.isfinite(half_y):
+    #         ax.hlines(half_y, x_left, x_right, ls="--", lw=1.2, color="0.5", alpha=0.9)
+    txt_bu = []
+    # if np.isfinite(peak_profile_Bu):
+    #     txt_bu.append(f"Peak Bu = {peak_profile_Bu*1e3:.2f} mT")
+    if np.isfinite(user_profile_Bu):
+        # txt_bu.append(f"Custom Bu slice at Bc={user_Bc:.4f} T")
+        txt_bu.append(f"Peak Bu = {user_profile_Bu:.4f} T")
+    if np.isfinite(user_profile_FWHM):
+        txt_bu.append(f"FWHM = {user_profile_FWHM:.4f} T")
+    if txt_bu:
+        ax.text(
+            0.68, 0.98, "\n".join(txt_bu),
+            transform=ax.transAxes,
+            va="top", ha="left",
+        )
+    ax.set_xlabel("Bu (T)")
     ax.set_ylabel(r"Normalized $\rho$")
-    ax.set_title(f"{sample_title} — Bu profiles")
-    ax.legend()
-    fig.tight_layout()
+    ax.set_title(f"{sample_title} - Vertical at Bc = {user_Bc:.6g} T".strip(), fontsize=10)
+    # ax.legend()
+    
+    fig.subplots_adjust(left=0.08, right=0.98, bottom=0.12, top=0.88, wspace=0.25)
 
     png_path = None
     if export_png:
@@ -3501,8 +3662,14 @@ def plot_custom_forc_profiles(
             "peak_Bu": peak_Bu,
             "peak_Bc": peak_Bc,
             "peak_rho": peak_rho,
+            "peak_profile_Bu": peak_profile_Bu,
+            "peak_profile_Bc": peak_profile_Bc,
+            "peak_profile_FWHM": peak_profile_FWHM,
             "user_Bu": float(user_Bu),
             "user_Bc": float(user_Bc),
+            "user_profile_Bu": user_profile_Bu,
+            "user_profile_Bc": user_profile_Bc,
+            "user_profile_FWHM": user_profile_FWHM,
             "Bu_axis_peak": Bu_axis_peak,
             "prof_bu_peak": prof_bu_peak,
             "Bu_axis_user": Bu_axis_user,
@@ -3516,6 +3683,7 @@ def plot_custom_forc_profiles(
             **custom_export_paths,
         }
     return None
+
 
 def export_figure(
     fig,
@@ -3544,7 +3712,6 @@ def export_figure(
 
 # Preserve the original single/stack implementation
 _run_forc_pipeline_core = run_forc_pipeline
-_export_current_figure_from_out_core = export_current_figure_from_out
 _plot_auto_forc_profiles_core = plot_auto_forc_profiles
 _plot_custom_forc_profiles_core = plot_custom_forc_profiles
 
@@ -3655,29 +3822,37 @@ def run_forc_pipeline(
         outs.append(one_out)
     return outs
 
-def export_current_figure_from_out(
-    out,
+def _export_current_figure_single(
+    out: Dict[str, object],
     filename: Optional[str] = None,
-    dpi: int = 300,
+    dpi: Optional[int] = None,
     close: bool = False,
-):
+) -> Path:
     """
-    Export the main FORC figure(s) from run_forc_pipeline(...) output.
+    Export the main FORC figure from one run_forc_pipeline(...) output dict
+    into FORC_figures.
+    """
+    fig = out.get("fig_rho", None)
+    if fig is None:
+        raise ValueError("No 'fig_rho' found in out.")
 
-    Accepts either:
-      - a single output dict
-      - a list of output dicts (batch mode)
-    """
-    if _is_out_list(out):
-        paths = []
-        for one_out in out:
-            paths.append(
-                _export_current_figure_from_out_core(
-                    one_out, filename=None, dpi=dpi, close=close
-                )
-            )
-        return paths
-    return _export_current_figure_from_out_core(out, filename=filename, dpi=dpi, close=close)
+    figures_dir = get_forc_figures_dir(out)
+
+    if filename is None:
+        filename = f"{out.get('sample_title', 'Sample')}_FORC.png"
+
+    if dpi is None:
+        dpi = int(out.get("export_dpi", 300))
+
+    out_path = export_figure(
+        fig,
+        filename=filename,
+        out_dir=figures_dir,
+        dpi=int(dpi),
+        close=close,
+    )
+    print(f"Saved: {out_path}")
+    return out_path
 
 def plot_auto_forc_profiles(
     out,
