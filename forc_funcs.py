@@ -297,7 +297,7 @@ def export_magic_measurements_from_raw(
     out_dir = p.parent if out_dir is None else as_path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    out_name = safe_filename(f"{_magic_basename(path)}_MagIC.txt")
+    out_name = safe_filename(f"/MagIC/{_magic_basename(path)}_MagIC.txt")
     out_path = out_dir / out_name
 
     groups = _read_numeric_groups_by_blanklines(path, data_start_idx=data_start_idx)
