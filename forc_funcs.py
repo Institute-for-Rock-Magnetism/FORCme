@@ -335,6 +335,39 @@ def _parse_numeric_line(line: str) -> Tuple[float, float]:
         raise ValueError(f"Not a numeric line: {line!r}")
     return float(m.group(1)), float(m.group(2))
 
+
+def _parse_first_two_numeric_columns(line: str) -> Optional[Tuple[float, float]]:
+    """
+    Parse the first two comma-separated numeric columns from a data row.
+
+    Standard and most multi-segment files have two columns:
+        Field, Moment
+
+    Some temperature-controlled MicroMag exports have three columns:
+        Field, Moment, Temperature
+
+    FORC processing only needs Field and Moment, so this helper accepts
+    either two or more comma-separated numeric columns and ignores extras.
+    """
+    parts = [p.strip() for p in line.strip().split(",")]
+    if len(parts) < 2:
+        return None
+
+    if re.fullmatch(_FLOAT, parts[0]) is None:
+        return None
+    if re.fullmatch(_FLOAT, parts[1]) is None:
+        return None
+
+    try:
+        return float(parts[0]), float(parts[1])
+    except Exception:
+        return None
+
+
+def _is_numeric_data_row_2plus(line: str) -> bool:
+    """True for numeric rows with at least Field and Moment columns."""
+    return _parse_first_two_numeric_columns(line) is not None
+
 def read_header_tags_and_data_start(path: PathLike) -> tuple[dict, int]:
     """
     Returns:
@@ -374,12 +407,21 @@ def read_header_tags_and_data_start(path: PathLike) -> tuple[dict, int]:
     return tags, data_start_idx
 
 def read_forc_header_limits(path: PathLike) -> Tuple[Optional[float], Optional[float]]:
+    """
+    Read Hb2/Hc2 when present.
+
+    For standard FORC exports these are taken directly from the header.
+    For multi-segment files they are not present, so we return approximate
+    defaults inferred from the script block.
+    """
     Hb2 = None
     Hc2 = None
 
     # Use normalized text so Windows/mac line endings + encodings behave the same
     txt = _read_text_normalized(path)
-    for line in txt.split("\n"):
+    lines = txt.split("\n")
+
+    for line in lines:
         if "Hb2" in line:
             try:
                 Hb2 = float(line.split()[-1])
@@ -393,11 +435,294 @@ def read_forc_header_limits(path: PathLike) -> Tuple[Optional[float], Optional[f
         if "Field" in line and "Moment" in line:
             break
 
+    if Hb2 is not None or Hc2 is not None:
+        return Hb2, Hc2
+
+    if is_multi_segment_forc_file(path):
+        try:
+            HCal, HSat, _, _, _ = infer_multi_segment_metadata(path)
+            if HSat is not None:
+                Hb2 = float(abs(HSat))
+                Hc2 = float(abs(HSat))
+            elif HCal is not None:
+                Hb2 = float(abs(HCal))
+                Hc2 = float(abs(HCal))
+        except Exception:
+            pass
+
     return Hb2, Hc2
 
-# ============================================================
-# Segmentation (robust Mac/Win)
-# ============================================================
+
+def is_multi_segment_forc_file(path: PathLike) -> bool:
+    """Return True when the file is a MicroMag multi-segment export."""
+    txt = _read_text_normalized(path)
+    lines = txt.split("\n")
+    if len(lines) < 2:
+        return False
+    return lines[1].strip() == "Direct moment vs. field; Multiple segments"
+
+
+def _find_multi_segment_data_start(lines: List[str]) -> int:
+    """
+    Find the first numeric data row after the actual two-column
+    "Field / Moment" header that follows the SCRIPT table.
+    """
+    header_idx = None
+    for i, line in enumerate(lines):
+        if ("Field" in line) and ("Moment" in line):
+            header_idx = i
+
+    if header_idx is None:
+        raise ValueError("Could not find the Field/Moment header in the multi-segment file.")
+
+    for i in range(header_idx + 1, len(lines)):
+        s = lines[i].strip()
+        if _is_numeric_data_row_2plus(s):
+            return i
+
+    raise ValueError("Could not find the numeric data section for the multi-segment FORC file.")
+
+
+def read_multi_segment_script(path: PathLike) -> List[Dict[str, float]]:
+    """Parse the SCRIPT table from a multi-segment MicroMag export."""
+    txt = _read_text_normalized(path)
+    lines = txt.split("\n")
+
+    seg_re = re.compile(
+        rf"^\s*(\d+)\s*,\s*({_FLOAT})\s*,\s*({_FLOAT})\s*,\s*({_FLOAT})\s*,\s*({_FLOAT})\s*,\s*({_FLOAT})\s*,\s*(\d+)\s*$"
+    )
+
+    script: List[Dict[str, float]] = []
+    prev_fidx = 0
+
+    for line in lines:
+        m = seg_re.match(line.strip())
+        if not m:
+            continue
+
+        final_index = int(m.group(7))
+        npts = final_index - prev_fidx
+        prev_fidx = final_index
+
+        script.append({
+            "num": int(m.group(1)),
+            "avg": float(m.group(2)),
+            "init": float(m.group(3)),
+            "inc": float(m.group(4)),
+            "final": float(m.group(5)),
+            "pause": float(m.group(6)),
+            "final_index": final_index,
+            "npts": int(npts),
+        })
+
+    if not script:
+        raise ValueError("Could not parse the SCRIPT table from the multi-segment file.")
+
+    return script
+
+
+def infer_multi_segment_metadata(path: PathLike) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float], List[Dict[str, float]]]:
+    """
+    Infer useful metadata from the multi-segment script:
+      HCal, HSat, Hb_min, Hb_max, script_rows
+    """
+    script = read_multi_segment_script(path)
+
+    HCal = None
+    HSat = None
+
+    cal_fields = [row["init"] for row in script if row["npts"] == 1 and abs(row["init"] - row["final"]) <= 1e-12]
+    if cal_fields:
+        # Use the most common single-point field as the calibration field.
+        vals, counts = np.unique(np.round(np.asarray(cal_fields, float), 9), return_counts=True)
+        HCal = float(vals[np.argmax(counts)])
+
+    forc_hb = [row["init"] for row in script if row["npts"] >= 2]
+
+    # A robust approximate saturation / maximum field for default plot limits.
+    # In the evenly spaced moment variant, many measured FORC subsegments end
+    # well below the saturation/calibration field, so the median final field is
+    # not a good estimate. Use the maximum absolute scripted field instead.
+    scripted_fields = []
+    for row in script:
+        scripted_fields.append(float(row["init"]))
+        scripted_fields.append(float(row["final"]))
+    if scripted_fields:
+        HSat = float(np.nanmax(np.abs(np.asarray(scripted_fields, float))))
+
+    Hb_min = float(np.nanmin(forc_hb)) if forc_hb else None
+    Hb_max = float(np.nanmax(forc_hb)) if forc_hb else None
+
+    return HCal, HSat, Hb_min, Hb_max, script
+
+
+def read_multi_segment_segments(
+    path: PathLike,
+    dtype=np.float64,
+    cal_tol_T: float = 2e-3,
+    verbose: bool = True,
+) -> List[Segment]:
+    """
+    Read a multi-segment FORC file and return calibration points and FORC
+    curves as Segment objects.
+
+    This parser handles both multi-segment styles:
+
+      A) FORC data stored as one longer measured row/segment after each calibration.
+      B) FORC data stored as many short measured rows/segments, with:
+           calibration point:       inc = 0, npts = 1, field ≈ HCal
+           ramp to reversal field:  npts = 0
+           reversal-field point:    inc = 0, npts = 1, field != HCal
+           FORC measured segments:  npts >= 1, usually npts = 2
+
+    The SCRIPT table's cumulative Final Index is used to slice the numeric
+    data section. Leading setup / major-loop data are ignored until the first
+    calibration point is reached.
+    """
+    txt = _read_text_normalized(path)
+    lines = txt.split("\n")
+    data_start_idx = _find_multi_segment_data_start(lines)
+
+    data_rows: List[Tuple[float, float]] = []
+    for line in lines[data_start_idx:]:
+        s = line.strip()
+        parsed = _parse_first_two_numeric_columns(s)
+        if parsed is not None:
+            data_rows.append(parsed)
+
+    if not data_rows:
+        raise ValueError("No numeric field/moment data were found in the multi-segment file.")
+
+    HCal, HSat, Hb_min, Hb_max, script = infer_multi_segment_metadata(path)
+    if HCal is None:
+        raise ValueError("Could not infer calibration field from the multi-segment SCRIPT table.")
+
+    segments: List[Segment] = []
+    cursor = 0
+    next_idx = 0
+    started = False
+
+    current_H: List[float] = []
+    current_M: List[float] = []
+    current_Hb: Optional[float] = None
+
+    def close_current_forc() -> None:
+        nonlocal current_H, current_M, current_Hb, next_idx
+
+        if len(current_H) >= 2:
+            Hb = current_Hb
+            if Hb is None or not np.isfinite(Hb):
+                Hb = float(np.nanmin(np.asarray(current_H, float)))
+
+            segments.append(Segment(
+                H=np.asarray(current_H, dtype=dtype),
+                M=np.asarray(current_M, dtype=dtype),
+                idx=next_idx,
+                kind="forc",
+                Hb=float(Hb),
+            ))
+            next_idx += 1
+
+        current_H = []
+        current_M = []
+        current_Hb = None
+
+    for row in script:
+        npts = int(row["npts"])
+        if npts < 0:
+            raise ValueError(f"Negative point count encountered in SCRIPT row {row['num']}")
+        if npts == 0:
+            # Usually a non-measured ramp, commonly from HCal down to the next Hb.
+            continue
+
+        block = data_rows[cursor:cursor + npts]
+        cursor += npts
+
+        if len(block) != npts:
+            raise ValueError(
+                f"SCRIPT/data mismatch in multi-segment file near segment {row['num']}: "
+                f"expected {npts} point(s), found {len(block)}."
+            )
+
+        H_block = [float(x) for x, _ in block]
+        M_block = [float(y) for _, y in block]
+
+        is_zero_increment = abs(float(row["inc"])) <= 1e-15
+        is_single_point = npts == 1
+        is_stationary = abs(float(row["init"]) - float(row["final"])) <= 1e-12
+
+        # Both calibration points and reversal-field points are usually
+        # zero-increment, single-point, stationary rows. Distinguish them
+        # using the modal calibration field.
+        is_zero_single = is_zero_increment and is_single_point and is_stationary
+        is_calibration = is_zero_single and abs(float(row["init"]) - float(HCal)) <= float(cal_tol_T)
+
+        if is_calibration:
+            # A calibration point marks the start of a new FORC cycle.
+            # If a previous FORC is active, close it first.
+            close_current_forc()
+
+            segments.append(Segment(
+                H=np.asarray(H_block, dtype=dtype),
+                M=np.asarray(M_block, dtype=dtype),
+                idx=next_idx,
+                kind="cal",
+                Hb=None,
+            ))
+            next_idx += 1
+            started = True
+            continue
+
+        if not started:
+            # Ignore leading setup / major-loop measurements before the first
+            # recognized calibration point.
+            continue
+
+        if is_zero_single:
+            # Non-calibration zero-increment single-point rows are reversal-field
+            # measurements. They start a new FORC and should be retained as the
+            # first point of that FORC.
+            close_current_forc()
+            current_H = H_block.copy()
+            current_M = M_block.copy()
+            current_Hb = float(H_block[0])
+            continue
+
+        # Measured FORC segment. In the evenly spaced moment version these are
+        # often two measured points at a time; in the older multi-segment version
+        # this may be one long segment.
+        if current_Hb is None:
+            current_Hb = float(np.nanmin(np.asarray(H_block, float)))
+
+        current_H.extend(H_block)
+        current_M.extend(M_block)
+
+    close_current_forc()
+
+    if cursor != len(data_rows):
+        raise ValueError(
+            f"Not all numeric data were consumed in the multi-segment parser: "
+            f"used {cursor}, total {len(data_rows)}."
+        )
+
+    if verbose:
+        n_cal = sum(s.kind == "cal" for s in segments)
+        n_forc = sum(s.kind == "forc" for s in segments)
+        forc_lens = [len(s.H) for s in segments if s.kind == "forc"]
+        if forc_lens:
+            print(
+                f"Multi-segment FORC detected | cal field≈{HCal:.6g} T | "
+                f"sat field≈{HSat:.6g} T | Hb≈{Hb_min:.6g}→{Hb_max:.6g} T | "
+                f"cal points={n_cal} | FORCs={n_forc} | "
+                f"FORC length min/median/max={min(forc_lens)}/{int(np.median(forc_lens))}/{max(forc_lens)}"
+            )
+        else:
+            print(
+                f"Multi-segment FORC detected | cal field≈{HCal:.6g} T | "
+                f"cal points={n_cal} | FORCs={n_forc}"
+            )
+
+    return segments
 
 def read_segments_raw(
     path: PathLike,
@@ -753,39 +1078,49 @@ def phase1_prepare_segments_dual(
       segs_display: drift-corrected + optional endpoint replacement (NO lower-branch subtraction)
       segs_rho:     segs_display, optionally lower-branch-subtracted
     """
-    tags, data_start_idx = read_header_tags_and_data_start(path)
-    if "HCal" not in tags:
-        raise ValueError("Header tag HCal not found; cannot split calibration points safely.")
-    HCal = float(tags["HCal"])
 
-    segs = read_segments_raw(
-        path,
-        data_start_idx=data_start_idx,
-        dtype=np.float64,
-        min_block_len=2,
-        blank_sep=blank_sep,
-        jump_T=jump_T,
-        HCal=HCal,
-        cal_tol_T=cal_tol_T,
-        cal_drop_T=cal_drop_T,
-        verbose=verbose,
-    )
+    if is_multi_segment_forc_file(path):
+        tags = {}
+        segs = read_multi_segment_segments(path, dtype=np.float64, verbose=verbose)
 
-    # Export MagIC directly from the raw file structure using blank-line-
-    # delimited numeric groups. This is independent of later internal FORC
-    # segmentation and drift correction.
-    try:
-        meas_temp_k = float(tags["Temperature"]) if "Temperature" in tags else None
-        export_magic_measurements_from_raw(
+        if export_magic and verbose:
+            print("MagIC export is currently skipped for multi-segment FORC files.")
+
+    else:
+        tags, data_start_idx = read_header_tags_and_data_start(path)
+        if "HCal" not in tags:
+            raise ValueError("Header tag HCal not found; cannot split calibration points safely.")
+        HCal = float(tags["HCal"])
+
+        segs = read_segments_raw(
             path,
             data_start_idx=data_start_idx,
-            meas_temp_k=meas_temp_k,
+            dtype=np.float64,
+            min_block_len=2,
+            blank_sep=blank_sep,
+            jump_T=jump_T,
+            HCal=HCal,
+            cal_tol_T=cal_tol_T,
+            cal_drop_T=cal_drop_T,
+            verbose=verbose,
         )
-    except Exception as e:
-        if verbose:
-            print(f"Warning: MagIC export failed for {path}: {e}")
 
-    segs = split_cal_first_point(segs, HCal=HCal, tol_T=cal_tol_T)
+        # Export MagIC directly from the raw file structure using blank-line-
+        # delimited numeric groups. This is independent of later internal FORC
+        # segmentation and drift correction.
+        if export_magic:
+            try:
+                meas_temp_k = float(tags["Temperature"]) if "Temperature" in tags else None
+                export_magic_measurements_from_raw(
+                    path,
+                    data_start_idx=data_start_idx,
+                    meas_temp_k=meas_temp_k,
+                )
+            except Exception as e:
+                if verbose:
+                    print(f"Warning: MagIC export failed for {path}: {e}")
+
+        segs = split_cal_first_point(segs, HCal=HCal, tol_T=cal_tol_T)
 
     cal_segs = [s for s in segs if s.kind == "cal"]
     if len(cal_segs) >= 2:
@@ -1540,6 +1875,146 @@ def _rho_norm(rho, pct=100, normalize_to_unit: bool = False):
 
     return TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax), vmax
 
+
+
+def plot_forc_distribution_hysteresis_space(
+    Hb_vals,
+    Ha_vals,
+    M_grid,
+    rho,
+    forcs: Optional[List[Segment]] = None,
+    title: str = "FORC distribution in hysteresis space",
+    figsize: Tuple[float, float] = (7, 6),
+    dpi: int = 120,
+    plot_fraction: float = 1.0,
+    max_rows: Optional[int] = None,
+    overlay_forc_curves: bool = True,
+    curve_lw: float = 0.45,
+    curve_alpha: float = 0.20,
+    marker_size: float = 10.0,
+    color_scale_version: int = 1,
+    normalize_to_unit: bool = True,
+    pct: float = 99.0,
+    add_origin_axes: bool = True,
+    return_fig: bool = False,
+):
+    """
+    Diagnostic plot of the FORC distribution in hysteresis space.
+
+    The usual FORC distribution rho is defined on the Hb-Ha grid, where Ha is
+    the applied field along a FORC and Hb is the reversal field. This function
+    maps each finite rho(Hb, Ha) cell back onto the corresponding hysteresis
+    curve using M_grid(Hb, Ha), and plots the result as H versus M colored by
+    rho. This makes it easier to see where the calculated FORC signal sits on
+    the measured/regridded FORC curves.
+
+    Parameters
+    ----------
+    Hb_vals, Ha_vals : 1D arrays
+        Reversal-field and applied-field grid coordinates.
+    M_grid : 2D array, shape (len(Hb_vals), len(Ha_vals))
+        Moment grid used for calculating rho.
+    rho : 2D array, shape (len(Hb_vals), len(Ha_vals))
+        FORC distribution on the same grid as M_grid.
+    forcs : list of Segment, optional
+        If provided, faint FORC curves are overlaid behind the colored rho
+        points. These should normally be the same FORCs used for rho after any
+        optional lower-branch subtraction/regridding.
+    """
+    Hb_vals = np.asarray(Hb_vals, float)
+    Ha_vals = np.asarray(Ha_vals, float)
+    M_grid = np.asarray(M_grid, float)
+    rho = np.asarray(rho, float)
+
+    if M_grid.shape != rho.shape:
+        raise ValueError(f"M_grid and rho must have the same shape; got {M_grid.shape} and {rho.shape}.")
+    if M_grid.shape != (len(Hb_vals), len(Ha_vals)):
+        raise ValueError(
+            "M_grid/rho shape must be (len(Hb_vals), len(Ha_vals)); "
+            f"got {M_grid.shape}, expected {(len(Hb_vals), len(Ha_vals))}."
+        )
+
+    n_rows = len(Hb_vals)
+    plot_fraction = 1.0 if plot_fraction is None else float(plot_fraction)
+    plot_fraction = max(0.0, min(1.0, plot_fraction))
+
+    if plot_fraction < 1.0 or max_rows is not None:
+        n_plot = int(np.ceil(n_rows * plot_fraction)) if plot_fraction > 0 else 0
+        if max_rows is not None:
+            n_plot = min(n_plot, int(max_rows))
+        n_plot = max(1, n_plot) if n_rows > 0 else 0
+        row_idx = np.unique(np.rint(np.linspace(0, n_rows - 1, n_plot)).astype(int))
+    else:
+        row_idx = np.arange(n_rows, dtype=int)
+
+    H2D = np.broadcast_to(Ha_vals[None, :], M_grid.shape)
+    mask = np.zeros_like(rho, dtype=bool)
+    mask[row_idx, :] = True
+    mask &= np.isfinite(H2D) & np.isfinite(M_grid) & np.isfinite(rho)
+    mask &= H2D >= Hb_vals[:, None]
+
+    if not np.any(mask):
+        raise ValueError("No finite rho/M_grid cells available for the hysteresis-space distribution plot.")
+
+    cmap = get_forc_cmap(color_scale_version)
+    norm, vmax = _rho_norm(rho, pct=pct, normalize_to_unit=normalize_to_unit)
+    rho_plot = (rho / vmax) if normalize_to_unit else rho
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+    if overlay_forc_curves and forcs is not None:
+        # Use the same curve subsampling logic as plot_forc_curves_hysteresis.
+        n = len(forcs)
+        if n > 0:
+            n_curve_plot = int(np.ceil(n * plot_fraction)) if plot_fraction > 0 else 0
+            if max_rows is not None:
+                n_curve_plot = min(n_curve_plot, int(max_rows))
+            n_curve_plot = max(1, n_curve_plot)
+            if n_curve_plot >= n:
+                sel_forcs = forcs
+            else:
+                idx = np.unique(np.rint(np.linspace(0, n - 1, n_curve_plot)).astype(int))
+                sel_forcs = [forcs[i] for i in idx]
+
+            for s in sel_forcs:
+                H = np.asarray(s.H, float)
+                M = np.asarray(s.M, float)
+                ok = np.isfinite(H) & np.isfinite(M)
+                if ok.sum() >= 2:
+                    ax.plot(H[ok], M[ok], lw=curve_lw, alpha=curve_alpha, color="0.35", zorder=1)
+
+    sc = ax.scatter(
+        H2D[mask],
+        M_grid[mask],
+        c=rho_plot[mask],
+        s=marker_size,
+        cmap=cmap,
+        norm=norm,
+        linewidths=0,
+        zorder=2,
+    )
+
+    if add_origin_axes:
+        ax.axhline(0, color="k", lw=0.8, alpha=0.8, zorder=0)
+        ax.axvline(0, color="k", lw=0.8, alpha=0.8, zorder=0)
+
+    ax.set_xlabel("H / Ha (T)")
+    ax.set_ylabel("M (A m$^2$)")
+    ax.set_title(title)
+
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="4%", pad=0.08)
+    cbar = fig.colorbar(sc, cax=cax)
+    cbar.set_label(r"$\rho$")
+
+    fig.subplots_adjust(left=0.14, right=0.88, bottom=0.14, top=0.88)
+    plt.show()
+
+    if return_fig:
+        return fig, ax, sc, cbar
+    return None
+
+
 # -------------------------
 # Grid upsampling for smoother FORC plots
 # -------------------------
@@ -1594,6 +2069,18 @@ def _low_level_contours(level_frac: float = 0.01) -> np.ndarray:
         return np.array([], dtype=float)
     return np.array([-f, +f], dtype=float)
 
+def _centers_to_edges_1d(x):
+    x = np.asarray(x, float)
+    if x.size < 2:
+        dx = 1.0
+        return np.array([x[0] - 0.5 * dx, x[0] + 0.5 * dx], dtype=float)
+
+    edges = np.empty(x.size + 1, dtype=float)
+    dx = np.diff(x)
+    edges[1:-1] = 0.5 * (x[:-1] + x[1:])
+    edges[0] = x[0] - 0.5 * dx[0]
+    edges[-1] = x[-1] + 0.5 * dx[-1]
+    return edges
 
 def plot_rho_HbHa(
     Hb_vals, Ha_vals, rho,
@@ -1624,8 +2111,22 @@ def plot_rho_HbHa(
 
     fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
 
-    extent = [Ha_vals[0], Ha_vals[-1], Hb_vals[0], Hb_vals[-1]]
-    im = ax.imshow(rho_plot, origin="lower", extent=extent, cmap=cmap, norm=norm, interpolation="nearest")
+    # Use actual Hb/Ha cell edges rather than imshow extent.
+    # This matters for adaptive/even-moment FORC files where Hb spacing is non-uniform.
+    Hb_edges = _centers_to_edges_1d(np.asarray(Hb_vals, float))
+    Ha_edges = _centers_to_edges_1d(np.asarray(Ha_vals, float))
+
+    Hb2D_e, Ha2D_e = np.meshgrid(Hb_edges, Ha_edges, indexing="ij")
+
+    pm = ax.pcolormesh(
+        Ha2D_e,
+        Hb2D_e,
+        rho_plot,
+        shading="auto",
+        cmap=cmap,
+        norm=norm,
+    )
+
     ax.set_aspect("equal", adjustable="box")
 
     if show_contours:
@@ -1667,7 +2168,7 @@ def plot_rho_HbHa(
 
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size="4%", pad=0.08)
-    cbar = fig.colorbar(im, cax=cax)
+    cbar = fig.colorbar(pm, cax=cax)
     cbar.set_label(r"$\rho$")
 
     plt.tight_layout()
@@ -1763,22 +2264,6 @@ def _rho_window_vmax_bu_bc(
     if (not np.isfinite(vmax)) or vmax <= 0:
         vmax = 1.0
     return vmax
-
-
-def _centers_to_edges_1d(x):
-    """
-    Convert 1D cell centers to 1D cell edges.
-    """
-    x = np.asarray(x, float)
-    if x.ndim != 1 or x.size < 2:
-        raise ValueError("x must be a 1D array with at least 2 points.")
-
-    dx = np.diff(x)
-    edges = np.empty(x.size + 1, dtype=float)
-    edges[1:-1] = 0.5 * (x[:-1] + x[1:])
-    edges[0] = x[0] - 0.5 * dx[0]
-    edges[-1] = x[-1] + 0.5 * dx[-1]
-    return edges
 
 
 def plot_rho_HuHc(
@@ -2076,6 +2561,7 @@ def run_forc_pipeline(
     # hysteresis plotting
     plot_hyst: bool = True,
     plot_fraction: float = 0.10,
+    plot_hyst_dist: bool = False,
     plot_hbha: bool = False,
     # endpoint replacement switches
     replace_first: bool = True,
@@ -2258,6 +2744,27 @@ def run_forc_pipeline(
             dpi=dpi,
         )
 
+    fig_hyst_dist = ax_hyst_dist = sc_hyst_dist = cbar_hyst_dist = None
+    if plot_hyst_dist:
+        title = f"{sample_title} — FORC distribution in hysteresis space"
+        if len(prepared) > 1:
+            title += " [stacked M-grid]"
+        fig_hyst_dist, ax_hyst_dist, sc_hyst_dist, cbar_hyst_dist = plot_forc_distribution_hysteresis_space(
+            Hb_vals_used,
+            Ha_vals_used,
+            M_grid_used,
+            rho,
+            forcs=forcs_for_rho_corr,
+            title=title,
+            plot_fraction=float(plot_fraction),
+            figsize=figsize,
+            dpi=dpi,
+            color_scale_version=color_scale_version,
+            normalize_to_unit=normalize_to_unit,
+            pct=pct,
+            return_fig=True,
+        )
+
     if plot_hbha:
         plot_rho_HbHa(
             Hb_vals_used, Ha_vals_used, rho,
@@ -2299,6 +2806,11 @@ def run_forc_pipeline(
         "ax_rho": ax_rho,
         "pm_rho": pm,
         "cbar_rho": cbar,
+
+        "fig_hyst_dist": fig_hyst_dist,
+        "ax_hyst_dist": ax_hyst_dist,
+        "sc_hyst_dist": sc_hyst_dist,
+        "cbar_hyst_dist": cbar_hyst_dist,
         
         "input_path": str(path),
         "input_files": [str(p) for p in input_files],
